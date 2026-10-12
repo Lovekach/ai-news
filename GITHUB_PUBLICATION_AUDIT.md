@@ -6,7 +6,7 @@ Audit date: 2026-10-12. Project: **AI News**.
 
 Repository: https://github.com/Lovekach/ai-news
 
-**PRIVATE — release checks in progress.** The repository was created private, with no generated README, license or initial remote commit. Public visibility is gated on review of the exact commit, remote history and tests.
+**PUBLIC.** The repository was created private, without a generated README, license or initial remote commit. The exact release tree and remote history passed review before public visibility was enabled. Anonymous API access confirmed the public repository and its complete file tree.
 
 ## Repository discovery
 
@@ -20,7 +20,7 @@ Three local Codex tree references were present. All 281 local Git objects, inclu
 - Gitleaks scanned a private working-directory snapshot, all exported local Git blobs/commit/tag objects, and ordinary Git history with `--all`: **zero findings**. There were no ordinary commits before preparation.
 - Additional byte-pattern checks inspected 653 working files, including live configuration, staging material, raw SQLite data, archives, logs and documentation. They found credential-shaped strings in private news/staging data and personal paths in operational material. Those files stay local and are excluded from the release; no credential values appear in this report.
 - Additional Git-object checks found personal paths in old internal snapshots, but no recognized credential patterns. Only newly reviewed source files are staged, without inheriting these snapshot trees as commit parents.
-- Exact comparison with the actual DPAPI-loaded bot token and common encodings is part of the staged/remote review. The token is kept in memory and never printed or written to audit output.
+- Staged and downloaded remote content passed additional credential patterns, contextual entropy, private-path/address and forbidden-file checks. Exact comparison with the actual DPAPI-loaded bot token and common encodings returned **zero matches**, including in the private working snapshot. The token stayed in memory and was never printed or written to audit output.
 - Live settings and encrypted secret files match the pre-edit snapshot. No secrets were rotated, changed or removed. No previously public AI News history was identified; accessible history of the new repository is checked after push.
 
 Scanning cannot prove the absence of every unknown secret format. New confirmed credential exposure would require owner rotation and a separate safe history-remediation plan; adding an ignore rule is insufficient.
@@ -29,7 +29,52 @@ Scanning cannot prove the absence of every unknown secret format. New confirmed 
 
 The ignore rules exclude live `config.json` / `watchlist.json`, `.env*`, `.secrets/`, `.state/`, `output/`, SQLite databases, logs, sessions, credential files, backups, caches, environments and model artifacts. Local operational/content reports are excluded because they contain publication history, private source text or personal paths. Existing files remain on disk.
 
-The release includes only reviewed application modules, tests, launch/setup scripts, documentation, sanitized example settings and a CI workflow. The final manifest is verified against the index and remote tree before public access.
+The release includes **38 explicitly selected files**. The index and downloaded remote tree agree; live data is absent. No automatic blanket staging of local changes was used.
+
+### Published file manifest
+
+```text
+.gitattributes
+.github/workflows/tests.yml
+.gitignore
+ARCHITECTURE.md
+GITHUB_PUBLICATION_AUDIT.md
+README.md
+SETUP_TELEGRAM.md
+ainews/__init__.py
+ainews/__main__.py
+ainews/daily.py
+ainews/digest.py
+ainews/feeds.py
+ainews/lock.py
+ainews/model_session.py
+ainews/pipeline.py
+ainews/quality.py
+ainews/security.py
+ainews/store.py
+ainews/telegram.py
+ainews/telegram_public.py
+ainews/x_rss.py
+config.example.json
+scripts/apply_content_corrections.py
+scripts/install_schedule.ps1
+scripts/install_telegram_schedule.ps1
+scripts/install_x_schedule.ps1
+scripts/python_runtime.ps1
+scripts/read_token.ps1
+scripts/run_hidden.pyw
+scripts/run_once.ps1
+scripts/store_token.ps1
+tests/test_audit_regressions.py
+tests/test_core.py
+tests/test_daily.py
+tests/test_production_readiness.py
+tests/test_security.py
+tests/test_x_rss.py
+watchlist.example.json
+```
+
+The private remote initially contained exactly one reviewed root commit, `main`, and no tags or other refs. Its complete Git object export and `--all` history scan returned zero Gitleaks/custom findings. Internal local Codex refs were not transported. Subsequent normal commits retain this clean release ancestry; there is no force push or history rewrite.
 
 ## Application review and changes
 
@@ -55,9 +100,11 @@ Scanner release: https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
 
 ## Tests and production preservation
 
-**109 unit/regression tests passed** in the installed production Python 3.14 and the independent Python test runtime. All seven PowerShell scripts parse successfully; Python path resolution was checked without running an installer. Tests use temporary databases and mocked sending: **no real Telegram test publication**.
+The initial release passed **109 unit/regression tests** in the installed production Python 3.14, the independent test runtime and an export containing only release files. A final Telegram request-path redaction regression brings the current suite to **110 passing tests**. All seven PowerShell scripts parse successfully; Python path resolution was checked without running an installer. Tests use temporary databases and mocked sending: **no real Telegram test publication**.
 
-Existing AI News tasks remain enabled with the correct project root. Collection runs every minute, Telegram scanning every five minutes, editing at 18:00 / 20:15 / 20:50 MSK, and the daily publisher at **21:00 MSK**. The live configuration, channel settings, token and SQLite ledger are retained. Production processes were not stopped for GitHub work.
+GitHub Actions for the first privately pushed release passed before visibility changed: Windows Python 3.11 / 3.14 tests and the Linux whole-history Gitleaks job. Evidence: https://github.com/Lovekach/ai-news/actions/runs/38232517426
+
+Existing AI News tasks remain enabled with the correct project root. Collection runs every minute, Telegram scanning every five minutes, editing at 18:00 / 20:15 / 20:50 MSK, and the daily publisher at **21:00 MSK**. Live configuration, watchlist and encrypted-token files match the pre-edit snapshot; channel posting permission was confirmed through read-only Bot API calls. The SQLite ledger is retained. Production processes were not stopped for GitHub work. This confirms readiness and the unchanged schedule, not delivery of a future evening edition.
 
 Daytime collection does not start the LLM; evening processing owns a finite localhost model session. The publisher does not start Ollama. No production model was launched merely for this audit.
 

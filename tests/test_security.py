@@ -15,6 +15,12 @@ from ainews.telegram import call, check_channel_access
 
 
 class SecurityTests(unittest.TestCase):
+    def test_redacts_bot_token_inside_telegram_request_path(self):
+        token = ''.join(['123456789', ':', 'x' * 35])
+        text = redact('https://api.telegram.org/bot' + token + '/getMe')
+        self.assertNotIn(token, text)
+        self.assertIn('/getMe', text)
+
     def test_redacts_url_credentials_query_and_authorization(self):
         message = 'https://user:example-password@example.com/feed?api_key=example-key&limit=2 Bearer example-session'
         cleaned = redact(message)

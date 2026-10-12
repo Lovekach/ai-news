@@ -4,10 +4,10 @@ from __future__ import annotations
 import re
 
 _CREDENTIALS = re.compile(
-    r"(?<![\w-])(?:\d{7,12}:[A-Za-z0-9_-]{30,50}|"
+    r"(?:(?<![0-9])\d{7,12}:[A-Za-z0-9_-]{30,50}|(?<![\w-])(?:"
     r"gh[pousr]_[A-Za-z0-9]{30,255}|github_pat_[A-Za-z0-9_]{40,255}|"
     r"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,255}|hf_[A-Za-z0-9]{25,255}|"
-    r"AIza[A-Za-z0-9_-]{30,50})(?![\w-])"
+    r"AIza[A-Za-z0-9_-]{30,50}))(?![\w-])"
 )
 _URL_AUTH = re.compile(r"(https?://)[^\s/@]+@", re.I)
 _QUERY_SECRET = re.compile(
