@@ -80,6 +80,20 @@ class SecurityTests(unittest.TestCase):
                 download_feed('https://u:p@example.com/feed', allowed_hosts=['example.com'])
         opener.assert_not_called()
 
+    def test_mirror_redirects_require_public_https_before_request(self):
+        # A dispatcher can choose another public host, but each hop is checked.
+        handler = SourceRedirectHandler(None)
+        request = Request('https://example.com/rss')
+        targets = ('http://mirror.example/rss', 'https://u:p@mirror.example/rss',
+                   'https://127.0.0.1/rss', 'https://[::1]/rss',
+                   'https://[fc00::1]/rss', 'https://localhost/rss')
+        for url in targets:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                handler.redirect_request(request, None, 302, 'Moved', {}, url)
+        self.assertEqual(handler.redirect_request(request, None, 302, 'Moved', {},
+                                                 'https://mirror.example/rss').full_url,
+                         'https://mirror.example/rss')
+
     def test_custom_bot_username_retains_channel_access_check(self):
         with patch('ainews.telegram.call', side_effect=[{'username': 'TestNewsBot', 'id': 1},
                 {'type': 'channel', 'title': 'Test'}, {'status': 'administrator', 'can_post_messages': True}]):

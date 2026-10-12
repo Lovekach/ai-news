@@ -29,7 +29,7 @@ Scanning cannot prove the absence of every unknown secret format. New confirmed 
 
 The ignore rules exclude live `config.json` / `watchlist.json`, `.env*`, `.secrets/`, `.state/`, `output/`, SQLite databases, logs, sessions, credential files, backups, caches, environments and model artifacts. Local operational/content reports are excluded because they contain publication history, private source text or personal paths. Existing files remain on disk.
 
-The release includes **38 explicitly selected files**. The index and downloaded remote tree agree; live data is absent. No automatic blanket staging of local changes was used.
+The initial release includes **38 explicitly selected files**. Its index and downloaded remote tree agree; live data is absent. No automatic blanket staging of local changes was used. The follow-up below adds three public files.
 
 ### Published file manifest
 
@@ -100,7 +100,7 @@ Scanner release: https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
 
 ## Tests and production preservation
 
-The initial release passed **109 unit/regression tests** in the installed production Python 3.14, the independent test runtime and an export containing only release files. A final Telegram request-path redaction regression brings the current suite to **110 passing tests**. All seven PowerShell scripts parse successfully; Python path resolution was checked without running an installer. Tests use temporary databases and mocked sending: **no real Telegram test publication**.
+The initial release passed **109 unit/regression tests** in the installed production Python 3.14, the independent test runtime and an export containing only release files. A final Telegram request-path redaction regression brought that release's suite to **110 passing tests**. All seven PowerShell scripts parse successfully; Python path resolution was checked without running an installer. Tests use temporary databases and mocked sending: **no real Telegram test publication**.
 
 GitHub Actions for the first privately pushed release passed before visibility changed: Windows Python 3.11 / 3.14 tests and the Linux whole-history Gitleaks job. Evidence: https://github.com/Lovekach/ai-news/actions/runs/38232517426
 
@@ -117,6 +117,22 @@ Daytime collection does not start the LLM; evening processing owns a finite loca
 - An ambiguous Telegram response needs manual delivery verification; a second fresh installation must not reuse the channel without migrating the ledger.
 - DPAPI does not protect against code already running as the same Windows user.
 - Use trusted public source hosts. Host allowlists are not a full network/DNS sandbox.
-- No license was added without owner approval.
+- The owner approved MIT for the code in the follow-up review; third-party content and model rights remain separate.
 
 No unrelated project was modified during this publication task.
+
+## Repository hardening follow-up — 2026-10-12
+
+The owner explicitly approved security settings and MIT attribution to Lovekach. The follow-up branch is `codex/github-hardening`; it adds `LICENSE`, `SECURITY.md` and `docs/DEMO_DIGEST.md`, bringing the public tree to **41 files**. The example digest is explicitly fictional and uses no production material.
+
+Description and topics now identify the project as a local AI news collector with a daily Telegram edition. README includes the CI badge, example digest, supported behavior, limitations and a clearly unimplemented roadmap. No new runtime dependencies, workflows or production configuration are introduced.
+
+Repository API readback confirms Secret Scanning, Push Protection, Dependabot alerts and private vulnerability reporting enabled. Open secret-scanning and Dependabot alert counts are both zero at review time. Dependabot automatic security-update PRs are a separate feature and are not enabled by this task. Actions default permissions are read-only and Actions cannot approve pull requests; existing workflow permissions remain `contents: read`.
+
+The `main` branch requires a pull request, resolution of conversations, an up-to-date branch and all three existing checks: `unittest (3.11)`, `unittest (3.14)` and `secrets`, tied to the GitHub Actions app. Protection applies to administrators. Force pushes and deletion are disabled. No second reviewer is required, allowing the owner to merge a successful PR independently. API readback confirms these settings; no competing rulesets exist.
+
+X mirror redirects previously used the default HTTP opener, checking HTTPS only after arrival. They now use the existing source redirect handler before each connection, while retaining the eight-second timeout and rotating public mirror destinations. The shared guard also rejects authenticated URLs, local hostnames and non-public IP literals. This is not a full DNS sandbox; configure trusted services. Feed/Telegram host allowlists remain in place.
+
+The new redirect regression brings the full offline suite to **111 passing tests** on production Python 3.14, including a clean export containing only the 41 public files. Tests do not send Telegram messages or launch the LLM. The production task definitions were read, not changed: the daily task still points to this AI News checkout at **21:00 MSK**; source collectors remain enabled. PremWire was not modified.
+
+Before pushing the follow-up, Gitleaks found no secrets in the staged public export or all existing remote history. Additional checks of staged files and all remote blob/commit objects found no forbidden files, credential patterns, contextual-entropy findings or personal paths. Exact comparison with the live DPAPI-loaded bot token and common encodings returned zero matches. Only the ten named source/test/documentation files are changed; live settings, private data and internal Codex references remain excluded. The same remote checks must pass again after PR publication and merge.

@@ -4,10 +4,10 @@ from email.utils import parsedate_to_datetime
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from xml.etree import ElementTree as ET
 
-from .feeds import Entry, strip_html, USER_AGENT
+from .feeds import Entry, strip_html, USER_AGENT, source_open
 from .security import safe_error
 
 MIRRORS = ("https://twiiit.com/{handle}/rss",
@@ -76,7 +76,9 @@ def read_x_source(source: dict):
         try:
             request = Request(url, headers={"User-Agent": USER_AGENT,
                                            "Accept": "application/rss+xml, application/xml, text/xml, */*"})
-            with urlopen(request, timeout=8) as response:
+            # Mirror dispatchers may redirect to another public HTTPS mirror.
+            # Validate each hop before connecting, sharing the feed guard.
+            with source_open(request, None, timeout=8) as response:
                 if urlparse(response.geturl()).scheme != "https":
                     raise ValueError("Non-HTTPS mirror redirect")
                 payload = response.read(2_000_001)
