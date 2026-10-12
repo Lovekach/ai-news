@@ -1,0 +1,11 @@
+{
+  "telegram": [],
+  "x": {
+    "companies": [],
+    "research_and_comparisons": []
+  },
+  "official_feed_coverage": {
+    "https://x.com/OpenAI": "OpenAI",
+    "https://x.com/ollama": "Ollama"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "publication_mode": "daily",
+  "daily_timezone": "Europe/Moscow",
+  "daily_publish_time": "21:00",
+  "auto_publish": false,
+  "channel_id": null,
+  "bot_username": "YOUR_BOT_USERNAME",
+  "model": "qwen3.5:9b",
+  "ollama_url": "http://127.0.0.1:11435",
+  "ollama_keep_alive": "2m",
+  "daily_prepare_seconds": 1500,
+  "poll_seconds": 60,
+  "digest_interval_hours": 24,
+  "digest_lookback_hours": 24,
+  "official_catchup_hours": 24,
+  "max_posts_per_day": 1,
+  "max_digest_items": 0,
+  "max_digest_chars": 3900,
+  "sources": [
+    {
+      "name": "OpenAI",
+      "feed": "https://openai.com/news/rss.xml",
+      "hosts": ["openai.com", "www.openai.com"],
+      "poll_seconds": 300,
+      "freshness_minutes": 1440,
+      "content_from_feed": true,
+      "auto_publish": true
+    },
+    {
+      "name": "Ollama",
+      "feed": "https://github.com/ollama/ollama/releases.atom",
+      "hosts": ["github.com"],
+      "poll_seconds": 60,
+      "freshness_minutes": 1440,
+      "feed_full_content": true,
+      "auto_publish": true
+    }
+  ]
+}
