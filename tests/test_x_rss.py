@@ -54,7 +54,7 @@ class XTests(unittest.TestCase):
             store.close()
 
     def test_invalid_handle_never_contacts_network(self):
-        with patch("ainews.x_rss.urlopen") as get:
+        with patch("ainews.x_rss.source_open") as get:
             with self.assertRaises(ValueError):
                 read_x_source({"handle": "bad/path", "name": "Bad"})
             get.assert_not_called()

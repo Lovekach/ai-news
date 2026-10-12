@@ -1,5 +1,7 @@
 # AI News
 
+[![Tests](https://github.com/Lovekach/ai-news/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/Lovekach/ai-news/actions/workflows/tests.yml)
+
 Local AI news collector and Russian-language Telegram daily digest. The project gathers public news during the day, prepares checked drafts with a local Ollama model in the evening, and publishes one digest around **21:00 Europe/Moscow**.
 
 It is designed for a personal Windows laptop: collection does not call the LLM, editorial work has a time budget, and the model process owned by this project exits after processing.
@@ -35,6 +37,10 @@ flowchart LR
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for modules, state transitions and failure behavior.
+
+## Example digest
+
+See [the synthetic demonstration](docs/DEMO_DIGEST.md): two related updates become one current story, with separate stories divided by whitespace. All names and events in that example are invented; it is not a real publication or a claim about model performance.
 
 ### Stack
 
@@ -168,6 +174,7 @@ Tests use temporary databases, fabricated fixtures and mocked network/publicatio
 - Live settings, DPAPI files, `.state`, databases, logs, archives, caches and models are ignored. Commit only example settings.
 - Tokens are loaded through a captured subprocess, not command-line arguments. Diagnostic paths redact known credential formats, authenticated URLs and secret query parameters.
 - Feed/article downloads require HTTPS and allowed hosts, including redirects before connection. Configure only trusted public hosts; this is not a sandbox for arbitrary URLs or DNS behavior.
+- X mirror dispatchers may redirect to different public HTTPS hosts. Every hop rejects authenticated URLs, local hostnames and non-public IP literals before connection. DNS resolution is not pinned; use only trusted mirror services.
 - External text is treated as data in prompts. The model cannot run commands or download code; JSON responses are checked before approval.
 - Daily Ollama binds to localhost and has finite lifetime. No public application server is started.
 - DPAPI protects secrets at rest for a Windows account, not against malware running as that user.
@@ -175,4 +182,18 @@ Tests use temporary databases, fabricated fixtures and mocked network/publicatio
 
 Before public release, scan the **whole Git history**. Rotate committed credentials; ignoring them later is insufficient. See [GITHUB_PUBLICATION_AUDIT.md](GITHUB_PUBLICATION_AUDIT.md) for the publication review.
 
-No license has been selected. Model and source content rights are separate from the code.
+Report vulnerabilities privately using [SECURITY.md](SECURITY.md). Changes to `main` go through a pull request and the existing Windows Python 3.11 / 3.14 and Gitleaks checks.
+
+## Limits and next steps
+
+This is a personal Windows application, not a hosted service. X mirrors and public Telegram pages can miss posts. Automated evidence checks can miss factual errors, and event grouping is heuristic. Only Telegram publishing is implemented; uncertain delivery requires manual investigation. The laptop must be awake at publication time.
+
+Planned improvements, **not implemented**:
+
+- Expand synthetic editorial fixtures for conflicting reports and changing access conditions.
+- Add a local view of source coverage, rejected stories and uncertain deliveries.
+- Evaluate more reliable X ingestion options without claiming free mirrors provide complete coverage.
+
+## License
+
+The project code is licensed under [MIT](LICENSE), copyright Lovekach. External news, third-party content and model weights are governed by their own terms; MIT does not grant rights to them.

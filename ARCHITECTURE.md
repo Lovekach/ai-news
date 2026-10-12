@@ -41,6 +41,12 @@ Keep the ledger when moving an installation. A second copy with a fresh database
 
 Coverage depends on source access. Checks do not independently verify every source assertion. Grouping may miss unusual wording or conflate ambiguous event descriptions.
 
+### External input boundary
+
+Feed/article and Telegram requests check HTTPS and their host allowlists before following redirects. X mirror dispatchers use the same redirect handler without a fixed host list, because the destination mirror can change; each hop still rejects credentials, local names and non-public IP literals. These checks do not pin DNS resolution. Configure trusted services rather than accepting arbitrary user-supplied URLs.
+
+News and model responses remain data: structured responses pass editorial checks and never become executable commands. Subprocess arguments are controlled by the application. CI uses synthetic fixtures and mocked publishing, without production tokens or a running model.
+
 ## Scheduling and resources
 
 Collection uses short Windows tasks every minute (official feeds/X) or five minutes (Telegram). Each official feed also has its own due time. Failed sources back off.

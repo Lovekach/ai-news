@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import ipaddress
 import json
 import re
 import urllib.error
@@ -127,19 +128,28 @@ def strip_html(value: str) -> str:
     return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", value)).split())
 
 
-def validate_source_url(url: str, allowed_hosts: list[str]) -> None:
+def validate_source_url(url: str, allowed_hosts: list[str] | None) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise ValueError("Only HTTPS sources are allowed")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("Credentials in source URLs are not allowed")
-    if (parsed.hostname or "").lower() not in allowed_hosts:
+    host = (parsed.hostname or "").lower()
+    if not host or host == 'localhost' or host.endswith(('.localhost', '.local')):
+        raise ValueError("Public source hostname is required")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError("Non-public source address is not allowed")
+    if allowed_hosts is not None and host not in allowed_hosts:
         raise ValueError("Source host is not allowed")
 
 
 class SourceRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Validate redirect destinations before any request to the new host."""
-    def __init__(self, allowed_hosts: list[str]):
+    def __init__(self, allowed_hosts: list[str] | None):
         self.allowed_hosts = allowed_hosts
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -147,9 +157,9 @@ class SourceRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def source_open(request, allowed_hosts: list[str]):
+def source_open(request, allowed_hosts: list[str] | None, *, timeout: int = 20):
     validate_source_url(request.full_url, allowed_hosts)
-    return urllib.request.build_opener(SourceRedirectHandler(allowed_hosts)).open(request, timeout=20)
+    return urllib.request.build_opener(SourceRedirectHandler(allowed_hosts)).open(request, timeout=timeout)
 
 
 def download(url: str, *, max_bytes: int = 2_000_000, allowed_hosts: list[str] | None = None) -> tuple[str, str]:
