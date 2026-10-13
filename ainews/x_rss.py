@@ -29,6 +29,42 @@ class _Links(HTMLParser):
                 self.urls.append(url)
 
 
+class _QuotedText(HTMLParser):
+    """Preserve Nitter quote boundaries instead of assigning 'we' to the poster."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.depth = 0
+        self.quote_depth = None
+        self.has_quote = False
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag not in {"br", "img", "hr", "input", "meta", "link"}:
+            self.depth += 1
+        if self.quote_depth is None and (tag == "blockquote" or
+                "quote" in values.get("class", "").split()):
+            self.quote_depth = self.depth
+            self.has_quote = True
+            self.parts.append("\n[Начало цитируемого поста]\n")
+        if tag == "a" and self.quote_depth is not None:
+            url = values.get("href", "")
+            if STATUS.search(url):
+                self.parts.append("\nИсточник цитаты: " + url + "\n")
+        if tag in {"p", "br"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self.quote_depth == self.depth:
+            self.parts.append("\n[Конец цитируемого поста]\n")
+            self.quote_depth = None
+        if tag not in {"br", "img", "hr", "input", "meta", "link"}:
+            self.depth = max(0, self.depth - 1)
+
+    def handle_data(self, text):
+        self.parts.append(text)
+
+
 def parse_x_rss(xml: str, source: dict) -> list[Entry]:
     root = ET.fromstring(xml.lstrip("\ufeff \t\r\n"))
     if root.tag != "rss":
@@ -46,7 +82,10 @@ def parse_x_rss(xml: str, source: dict) -> list[Entry]:
             continue
         post_id = match.group(1)
         description = item.findtext("description") or ""
-        text = strip_html(description) or strip_html(title)
+        quoted = _QuotedText()
+        quoted.feed(description)
+        text = ("Комментарий аккаунта " + handle + ":\n" + "".join(quoted.parts).strip()
+                if quoted.has_quote else strip_html(description) or strip_html(title))
         links = _Links()
         links.feed(description)
         # Preserve full article URLs hidden behind shortened labels in RSS.

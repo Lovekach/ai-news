@@ -390,7 +390,12 @@ class EditorialQualityTests(unittest.TestCase):
                  patch("ainews.pipeline.polish_draft", return_value=draft), \
                  patch("ainews.pipeline.verify_draft"):
                 self.assertIn("READY", prepare(config, store, limit=1)[0])
-                generate.assert_called_once_with(config, "New model launch", summary, official_brief=True)
+                generate.assert_called_once()
+                settings, actual_title, actual_summary = generate.call_args.args
+                self.assertEqual((actual_title, actual_summary), ("New model launch", summary))
+                self.assertTrue(generate.call_args.kwargs['official_brief'])
+                self.assertEqual(settings['_source_url'], url)
+                self.assertTrue(all(settings[key] == value for key, value in config.items()))
             store.close()
 
     def test_short_official_announcement_is_given_a_brief_news_prompt(self):

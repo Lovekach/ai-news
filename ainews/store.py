@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,16 @@ class Store:
                 sent_at TEXT
             );
             CREATE INDEX IF NOT EXISTS items_state_idx ON items(state, created_at);
+            CREATE TABLE IF NOT EXISTS editorial_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL,
+                checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                stage TEXT NOT NULL, details TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS source_dates (
+                url TEXT PRIMARY KEY, source_published TEXT,
+                source_updated TEXT, original_published TEXT, event_date TEXT,
+                date_kind TEXT NOT NULL DEFAULT 'published'
+            );
             CREATE TABLE IF NOT EXISTS corrections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
@@ -81,10 +92,34 @@ class Store:
                 last_error TEXT
             );
         """)
+        # Additive migration also supports an interrupted upgrade. Existing
+        # news, receipts and source dates are retained.
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(source_dates)")}
+        if "date_kind" not in columns:
+            self.db.execute("ALTER TABLE source_dates ADD COLUMN date_kind TEXT NOT NULL DEFAULT 'published'")
         self.db.commit()
 
     def close(self) -> None:
         self.db.close()
+
+    def record_editorial(self, url: str, stage: str, details: dict) -> None:
+        # Local provenance and decisions stay in the ignored database. No LLM
+        # prompts or credentials are needed to explain a rejection afterwards.
+        with self.db:
+            self.db.execute("INSERT INTO editorial_audit(url,stage,details) VALUES (?,?,?)",
+                            (url, stage, json.dumps(details, ensure_ascii=False)))
+
+    def record_source_dates(self, url: str, *, original_published: str | None = None,
+                            source_updated: str | None = None, event_date: str | None = None) -> None:
+        with self.db:
+            self.db.execute("""INSERT INTO source_dates(url,source_published,source_updated,original_published,event_date)
+                SELECT url,published,?,?,? FROM items WHERE url=?
+                ON CONFLICT(url) DO UPDATE SET
+                source_updated=COALESCE(excluded.source_updated,source_dates.source_updated),
+                original_published=COALESCE(excluded.original_published,source_dates.original_published),
+                event_date=COALESCE(excluded.event_date,source_dates.event_date)
+                """, (source_updated, original_published, event_date, url))
+        # Unknown event_date remains NULL, never filled from discovery time.
 
     def telegram_channel(self, handle: str) -> sqlite3.Row | None:
         return self.db.execute("SELECT * FROM telegram_channels WHERE handle=?", (handle,)).fetchone()
@@ -172,6 +207,14 @@ class Store:
                     (entry.url, entry.source, entry.title, entry.published, entry.summary, state),
                 )
                 added += cursor.rowcount
+                self.db.execute("""INSERT INTO source_dates(url,source_published,source_updated,date_kind)
+                    VALUES (?,?,?,?) ON CONFLICT(url) DO UPDATE SET
+                    source_updated=COALESCE(excluded.source_updated,source_dates.source_updated),
+                    date_kind=excluded.date_kind,
+                    source_published=CASE WHEN excluded.date_kind='updated' THEN NULL
+                        ELSE COALESCE(source_dates.source_published,excluded.source_published) END
+                    """, (entry.url, entry.published if entry.date_kind == "published" else None,
+                          entry.updated, entry.date_kind))
         return added
 
     def next_pending(self) -> sqlite3.Row | None:
@@ -183,6 +226,8 @@ class Store:
                 "UPDATE items SET state=?, article=COALESCE(?,article), draft=COALESCE(?,draft), error=? WHERE url=?",
                 (state, article, draft, error, url),
             )
+            self.db.execute("INSERT INTO editorial_audit(url,stage,details) VALUES (?,?,?)",
+                            (url, "decision", json.dumps({"state": state, "reason": error}, ensure_ascii=False)))
 
     def mark_sent(self, url: str, message_id: int) -> None:
         with self.db:

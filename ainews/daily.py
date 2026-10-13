@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from .digest import AD_TITLE, NEWS_SEPARATOR, card, parse_draft, published_in_window
 from .pipeline import (SCHEMA, align_evidence, draft_text, duplicate_story, duplicate_title,
                        canonical_title, ollama_json, prepare, telegram_evidence_url, verify_draft)
-from .quality import event_signature
+from .quality import event_signature, draft_issues, source_window
 from .store import Store
 
 # Moscow has UTC+3 throughout the year. Explicit offset also works on Windows
@@ -94,6 +94,10 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
         except ValueError:
             discarded.append((row["url"], "Invalid approved draft"))
             continue
+        issues = draft_issues(row["article"] or row["summary"], row["draft"], headline=fields["headline"])
+        if issues:
+            discarded.append((row["url"], "Quality review required: " + "; ".join(issues)))
+            continue
         if canonical_title(fields["what"]) in sent_facts:
             discarded.append((row["url"], "Already published facts; no new development"))
             continue
@@ -115,7 +119,7 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
 
 
 def fingerprint(group: list) -> str:
-    content = [(r["url"], r["published"], r["draft"], r["article"]) for r in group]
+    content = ["quality-v2", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -137,7 +141,7 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
         # among older messages rather than losing them to one long article.
         latest = group[0]
         evidence_parts = [f"Самое новое сообщение, дата: {latest['published']}\n"
-                          + (latest['article'] or latest['summary'])[:3000]]
+                          + source_window(latest['article'] or latest['summary'], 3000)]
         older_budget = max(100, (6400 - len(evidence_parts[0])) // (len(group) - 1))
         evidence_parts.extend(f"Предыдущее сообщение, дата: {r['published']}\n{r['draft'][:older_budget]}"
                               for r in group[1:])
@@ -270,11 +274,24 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
         cached = store.db.execute("SELECT draft FROM daily_story_drafts WHERE fingerprint=?",
                                   (fingerprint(group),)).fetchone()
         fields = parse_draft(cached[0] if cached else group[0]["draft"])
+        original = "\n".join(r["article"] or r["summary"] for r in group)
+        issues = draft_issues(original, card(fields, detail_first=True), headline=fields["headline"])
+        if issues:
+            discarded.extend((r["url"], "Quality review required: " + "; ".join(issues)) for r in group)
+            continue
         cards.append((fields, group, primary_links(config, group)))
     full = NEWS_SEPARATOR.join(card(fields, detail_first=True) + ("\n\n" + "\n".join(links) if links else "")
                                for fields, _, links in cards)
-    limit = min(4096, int(config.get("max_digest_chars", 3900)))
+    limit = min(3900, int(config.get("max_digest_chars", 3900)))
     chosen = allocate_cards(cards, limit)
+    checked = []
+    for text, group in chosen:
+        issues = draft_issues("\n".join(r["article"] or r["summary"] for r in group), text)
+        if issues:
+            discarded.extend((r["url"], "Quality review required after shortening: " + "; ".join(issues)) for r in group)
+        else:
+            checked.append((text, group))
+    chosen = checked
     telegram = NEWS_SEPARATOR.join(text for text, _ in chosen)
     urls = [row["url"] for _, group in chosen for row in group]
     return Edition(full, telegram, urls, discarded, len(cards), len(chosen))
@@ -288,7 +305,9 @@ def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         return ["Today's Daily Digest already reserved; no LLM started"]
     pending = sorted(candidates(store, current, ("pending",)), key=priority, reverse=True)
     ready_groups = groups(config, store, current)[0]
-    if not pending and not any(len(g) > 1 for g in ready_groups):
+    final_watch = now is None and current.hour == 20 and current.minute >= 50
+    needs_merge = any(len(g) > 1 for g in ready_groups)
+    if not pending and not needs_merge and not final_watch:
         return ["No candidates need LLM processing"]
     from .model_session import model_session
     stop = current.replace(hour=20, minute=59, second=0, microsecond=0)
@@ -296,9 +315,25 @@ def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     if seconds < 20:
         return ["Evening editorial window closed"]
     settings = {**config, "_deadline": time.monotonic() + seconds}
-    with model_session(settings, root):
-        report = prepare(settings, store, limit=max(1, len(pending)), candidate_urls=[r["url"] for r in pending])
-        report.extend(merge_stories(settings, store, current))
+    report = []
+    if pending or needs_merge:
+        with model_session(settings, root):
+            report = prepare(settings, store, limit=max(1, len(pending)), candidate_urls=[r["url"] for r in pending])
+            report.extend(merge_stories(settings, store, current))
+    # The final existing editor task watches late arrivals only until 20:59.
+    # SQL/sleep happen AFTER the owned GPU session closes. Earlier runs exit.
+    # A fixed replay/test clock opts out of waiting; no all-day resident loop.
+    if final_watch:
+        while time.monotonic() + 20 < settings["_deadline"]:
+            time.sleep(min(30, max(0, settings["_deadline"] - time.monotonic() - 20)))
+            current = local_now()
+            if store.digest(window(current)[0]):
+                break
+            late = sorted(candidates(store, current, ("pending",)), key=priority, reverse=True)
+            if late:
+                with model_session(settings, root):
+                    report.extend(prepare(settings, store, limit=len(late), candidate_urls=[r["url"] for r in late]))
+                    report.extend(merge_stories(settings, store, current))
     return report
 
 
@@ -310,11 +345,15 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     if not config.get("auto_publish") or not config.get("channel_id") or not publication_window(current) or store.digest(slot):
         return []
     edition = compose_daily(config, store, current)
+    for url, reason in edition.discarded:
+        if reason.startswith("Quality review required"):
+            store.set_state(url, "needs_review", error=reason)
+    safe_discarded = [(u, r) for u, r in edition.discarded if not r.startswith("Quality review required")]
     report = [f"Daily Digest candidates: {len(candidates(store, current, ('ready',)))}",
               f"After deduplication: {edition.stories}", f"Selected important stories: {edition.selected}",
               f"Unprocessed candidates: {len(candidates(store, current, ('pending',)))}"]
     if not edition.telegram or not edition.urls:
-        for url, reason in edition.discarded:
+        for url, reason in safe_discarded:
             store.set_state(url, "skipped", error=reason)
         return report + ["No verified news: no empty post published"]
     # Archive before any external send. It is reusable for platforms accepting
@@ -325,7 +364,16 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     document = {"date": str(current.date()), "timezone": "Europe/Moscow", "cutoff": current.isoformat(),
                 "full_text": edition.full, "telegram_text": edition.telegram, "published_urls": edition.urls,
                 "full_edition_urls": [r["url"] for group in groups(config, store, current)[0] for r in group],
-                "stories": edition.stories, "selected": edition.selected}
+                "stories": edition.stories, "selected": edition.selected,
+                "quality": {"findings": edition.discarded,
+                            "unprocessed": len(candidates(store, current, ("pending",))),
+                            "needs_review": len(candidates(store, current, ("needs_review",))),
+                            "telegram_utf16": units(edition.telegram)},
+                "provenance": [{"url": r["url"], "source_published": r["published"],
+                                "discovered_at": r["created_at"],
+                                "dates": dict(dates) if (dates := store.db.execute(
+                                    "SELECT * FROM source_dates WHERE url=?", (r["url"],)).fetchone()) else None}
+                               for group in groups(config, store, current)[0] for r in group]}
     staged = filename.with_suffix(".tmp")
     staged.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     staged.replace(filename)
@@ -333,7 +381,7 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         token = (token_reader or read_token)()
     except Exception as exc:
         return report + [f"Publication not started: token unavailable ({type(exc).__name__})"]
-    if not store.reserve_digest(slot, edition.telegram, edition.urls, edition.discarded):
+    if not store.reserve_digest(slot, edition.telegram, edition.urls, safe_discarded):
         return report + ["Daily Digest already reserved"]
     report.append("Digest generated")
     try:
