@@ -23,6 +23,8 @@ class Entry:
     url: str
     published: str
     summary: str
+    updated: str | None = None
+    date_kind: str = "published"
 
 
 class TextExtractor(HTMLParser):
@@ -230,14 +232,16 @@ def parse_feed(xml: str, source: str) -> list[Entry]:
             published = (node.findtext(f"{ATOM}published") or node.findtext(f"{ATOM}updated") or "").strip()
             summary = strip_html(node.findtext(f"{ATOM}summary") or node.findtext(f"{ATOM}content") or "")
             if title and url:
-                entries.append(Entry(source, title, url, published, summary))
+                entries.append(Entry(source, title, url, published, summary,
+                                     (node.findtext(f"{ATOM}updated") or "").strip() or None,
+                                     "published" if node.findtext(f"{ATOM}published") else "updated"))
     elif root.tag == f"{SITEMAP}urlset":
         for node in root.findall(f"{SITEMAP}url"):
             url = (node.findtext(f"{SITEMAP}loc") or "").strip()
             published = (node.findtext(f"{SITEMAP}lastmod") or "").strip()
             title = unquote(urlparse(url).path.rstrip("/").split("/")[-1]).replace("-", " ").strip()
             if title and url:
-                entries.append(Entry(source, title, url, published, ""))
+                entries.append(Entry(source, title, url, published, "", published, "updated"))
     else:
         raise ValueError("Unsupported feed format")
     return entries

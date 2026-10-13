@@ -123,7 +123,8 @@ class DailyTests(unittest.TestCase):
     def test_full_archive_keeps_more_than_telegram_and_no_utf16_overflow(self):
         for index in range(12):
             self.add(str(index), headline=f'GPT-{index+10} новая модель 🧠',
-                     what=('Модель обрабатывает документы и помогает искать подтверждённые сведения. ' * 14),
+                     what=' '.join(f'В тесте задачи {n} модель обрабатывает документы и находит подтверждённые сведения.'
+                                   for n in range(14)),
                      caveat='Доступ пока только в тестовой версии.')
         edition = compose_daily(self.config, self.store, self.now)
         self.assertLessEqual(units(edition.telegram), 3900)

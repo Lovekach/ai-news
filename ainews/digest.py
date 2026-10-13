@@ -109,11 +109,17 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
     selected["what"].append(sections["what"][0])
     # Conditions must survive shortening; omit the item if they do not fit.
     important = re.compile(r"(?i)\b(?:только|ограничен\w*|предварительн\w*|тестов\w*|"
-                           r"размеченн\w*|не\s+означает|по\s+(?:оценке|данным)|в\s+(?:их|этих)\s+тестах)\b")
+                           r"размеченн\w*|не\s+означает|по\s+(?:оценке|данным|сообщению)|"
+                           r"сообщ\w*|заяв\w*|в\s+(?:их|этих)\s+тестах)\b")
     for sentence in sections["what"][1:]:
         if important.search(sentence):
             selected["what"].append(sentence)
     selected["caveat"] = sections["caveat"][:]
+    # A measured result and its comparison conditions are information, even
+    # when the small writer incorrectly put them in an explanatory field.
+    quantified = re.compile(r"\d+(?:[.,]\d+)?\s*(?:%|процент\w*|раза\b|балл\w*|секунд\w*)", re.I)
+    for key in ("simple", "why"):
+        selected[key] = [sentence for sentence in sections[key] if quantified.search(sentence)]
     if len(render(selected)) > max_chars:
         return ""
     if detail_first:

@@ -18,6 +18,9 @@ It is designed for a personal Windows laptop: collection does not call the LLM, 
 - Transactional edition reservation and blocked automatic retries after ambiguous delivery.
 - Windows Task Scheduler integration with hidden, finite processes.
 
+See [editorial quality checks](docs/EDITORIAL_QUALITY.md) for attribution, date
+provenance, publication-time checks and their limitations.
+
 ## Architecture
 
 ```mermaid

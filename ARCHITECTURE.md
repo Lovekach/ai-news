@@ -41,6 +41,12 @@ Keep the ledger when moving an installation. A second copy with a fresh database
 
 Coverage depends on source access. Checks do not independently verify every source assertion. Grouping may miss unusual wording or conflate ambiguous event descriptions.
 
+`editorial_audit` retains decisions, verification results and revision reasons.
+`source_dates` separates publication/update/event dates; discovery stays in
+`items.created_at`. Unknown dates are retained as null. Deterministic guards run
+again on approved, merged and shortened cards. See
+[EDITORIAL_QUALITY.md](docs/EDITORIAL_QUALITY.md) for checks and limitations.
+
 ### External input boundary
 
 Feed/article and Telegram requests check HTTPS and their host allowlists before following redirects. X mirror dispatchers use the same redirect handler without a fixed host list, because the destination mirror can change; each hop still rejects credentials, local names and non-public IP literals. These checks do not pin DNS resolution. Configure trusted services rather than accepting arbitrary user-supplied URLs.
@@ -52,6 +58,10 @@ News and model responses remain data: structured responses pass editorial checks
 Collection uses short Windows tasks every minute (official feeds/X) or five minutes (Telegram). Each official feed also has its own due time. Failed sources back off.
 
 Editing runs at 18:00, 20:15 and 20:50 MSK with a finite budget. The model server binds to `127.0.0.1:11435`; an occupied port is refused. A Windows Job Object owns the server tree and terminates only those children when closed. The last editorial invocation stops before the publisher.
+
+The final invocation also checks for late pending items until 20:59, sleeping
+outside the Ollama session. No model is kept alive solely while waiting for an
+arrival or for the publisher. Earlier editorial invocations exit when finished.
 
 The publisher runs at 21:00 MSK, accepts 20:56–21:04 and does not start Ollama. Selection covers the current Moscow calendar date through the cutoff; another day's records are excluded. Moscow UTC+3 is explicit and independent of the computer's time zone. The implementation is fixed to this schedule.
 
