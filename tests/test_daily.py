@@ -163,7 +163,9 @@ class DailyTests(unittest.TestCase):
              patch('ainews.daily.draft_text', return_value='🧠 GPT-8 вышла\n\nЧто произошло: Модель выпущена.'), \
              patch('ainews.daily.verify_draft') as verify:
             merge_stories(self.config, self.store, self.now)
-            self.assertEqual(verify.call_count, 2)
+            # Verify every merged claim against original evidence; the latest
+            # short notice alone cannot establish details from older sources.
+            self.assertEqual(verify.call_count, 1)
         self.assertIn('GPT-8 вышла', compose_daily(self.config, self.store, self.now).telegram)
 
     def test_failed_merge_falls_back_to_latest_verified_copy(self):

@@ -40,6 +40,48 @@ limit gets one bounded retry with the same schema and prompt. Partial JSON is
 never accepted or repaired into facts. Failed checks retain the original article
 for investigation and send the item to `needs_review`.
 
+An explicit verifier rejection requires a text revision. Later checks of smaller
+claim groups cannot override it. Measurement findings are reported together, so
+the existing bounded revision loop can repair all observed unit/condition errors.
+Writer, style-editor and revision responses are retained in the private audit.
+The verifier and correction editor use Ollama's native chat API with separate
+system instructions and JSON evidence in a user message. The same installed model and non-thinking mode
+are retained. An experimental thinking/structured-output combination returned JSON
+inside reasoning with an empty final response on the installed runtime and was
+rejected. Only the final content is accepted. Tokens and overall runtime remain
+bounded by the existing editorial deadline; no additional model or service is added.
+
+Measurement guards distinguish context tokens from characters, reasoning mode
+from agent-only restrictions, aggregate parallel throughput from a single response,
+and milliseconds from seconds. Short GPU announcements preserve stated interfaces
+and cooling. A benchmark index leader cannot inherit another model's speed or cost
+record. Source-backed translation repairs cover context/vocabulary units, the
+cited parallel throughput condition and an index score mislabeled as a subtest.
+Explicit author measurements retain attribution without inventing a developer role.
+Numbers and facts still require the unchanged checks, and original source text
+is never edited. Missing evidence remains a review decision, never a numerical
+quality score.
+
+Event grouping identifies the main product, its explicit version, brand namespace,
+event type and distinct hosting provider. Generic versioned product names are
+supported; a competitor in a comparison does not become the subject. Original
+announcement titles establish availability events even if Russian headlines differ.
+App, developer API and global notices of the same rollout can form one story;
+model releases, patches, benchmarks and distinct provider launches remain separate.
+Merged text is checked against original source excerpts, not earlier paraphrases.
+For availability notices, intact approved sentences are combined first and
+verified against every original and the newest state. No new prose is invented
+in this path; contradictions must pass the same verifier before caching.
+The verifier receives separate dated original documents when they fit the
+existing evidence budget; a short new notice does not cancel earlier details
+without a contradiction. Relative "today" wording and leaked editorial
+instructions are removed from generated prose, preserving date metadata.
+An invalid merge receives at most two revisions within the existing deadline;
+only a revised, verified result can replace the latest approved fallback.
+Availability is not a new model release; a combined index score cannot be
+assigned to a named subtest. Expert counts retain their per-block scope.
+Full primary announcements take precedence over short X echoes in the link budget.
+
 A transient article connection/timeout failure gets one editorial retry before
 review. It never approves a story or bypasses factual checks. Repeated failures
 are held rather than creating an unbounded retry loop.
@@ -56,6 +98,12 @@ Telegram's application budget is **3900 UTF-16 code units**, even if a larger
 limit is configured. Primary links and complete qualifying sentences survive
 compaction. The full local edition includes coverage findings and date
 provenance. The transaction and uncertain-delivery ledger still prevent retries.
+Model releases, access expansions and developer tools receive an explicit priority
+tier before keyword weights. Compaction favors concrete specifications over generic
+benefits and keeps concurrency conditions attached to throughput results.
+Subscription and paid API conditions survive even when the writer puts them
+outside the main paragraph. Repeated reasoning-mode definitions are omitted
+without dropping distinct numeric details.
 
 The existing final evening editor task can pick up late queue arrivals until its
 20:59 deadline. Its short SQL/sleep waits run outside the owned Ollama session;

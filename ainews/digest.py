@@ -89,9 +89,14 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
         None, canonical_title(fields["what"]), canonical_title(fields["simple"])
     ).ratio() >= 0.75:
         sections["simple"] = []
+    if re.search(r"reasoning-only.{0,100}(?:перед|до).{0,30}ответ", fields['what'], re.I):
+        sections['simple'] = [sentence for sentence in sections['simple']
+                              if not (re.search(r"^Режим reasoning-only означает.{0,160}(?:перед|до).{0,30}ответ", sentence, re.I)
+                                      and not re.search(r"\d", sentence))]
 
     def render(chosen: dict[str, list[str]]) -> str:
-        main = " ".join(chosen["what"])
+        # Selection favors details; rendering preserves their original order.
+        main = " ".join(sentence for sentence in sections["what"] if sentence in chosen["what"])
         explanation = " ".join(" ".join(chosen[key]) for key in ("simple", "why", "caveat") if chosen[key])
         paragraphs = ["  " + main] if main else []
         if explanation:
@@ -109,6 +114,8 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
     selected["what"].append(sections["what"][0])
     # Conditions must survive shortening; omit the item if they do not fit.
     important = re.compile(r"(?i)\b(?:только|ограничен\w*|предварительн\w*|тестов\w*|"
+                           r"параллел\w*|суммарн\w*|одновременн\w*|"
+                           r"платн\w*\s+тариф\w*|подписчик\w*|"
                            r"размеченн\w*|не\s+означает|по\s+(?:оценке|данным|сообщению)|"
                            r"сообщ\w*|заяв\w*|в\s+(?:их|этих)\s+тестах)\b")
     for sentence in sections["what"][1:]:
@@ -119,13 +126,16 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
     # when the small writer incorrectly put them in an explanatory field.
     quantified = re.compile(r"\d+(?:[.,]\d+)?\s*(?:%|процент\w*|раза\b|балл\w*|секунд\w*)", re.I)
     for key in ("simple", "why"):
-        selected[key] = [sentence for sentence in sections[key] if quantified.search(sentence)]
+        selected[key] = [sentence for sentence in sections[key] if quantified.search(sentence) or important.search(sentence)]
     if len(render(selected)) > max_chars:
         return ""
     if detail_first:
         # Daily editions spend scarce space on concrete event details before
         # generic explanations. Conditions and all caveats are already kept.
-        order = [("what", index) for index in range(1, len(sections["what"]))]
+        technical = re.compile(r"\d|PCIe|охлажден|охлаждён|интерфейс|режим|рассужден", re.I)
+        indices = sorted(range(1, len(sections["what"])),
+                         key=lambda index: not bool(technical.search(sections["what"][index])))
+        order = [("what", index) for index in indices]
         order += [(key, index) for key in ("simple", "why", "caveat") for index in range(len(sections[key]))]
     else:
         order = [(key, 0) for key in ("caveat", "simple", "why")]

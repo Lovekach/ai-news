@@ -261,7 +261,7 @@ class GateTests(unittest.TestCase):
         draft["caveat"] = "Создание своих аватаров доступно только после допуска компании."
         self.assertIn("только после допуска", draft_text(draft, source))
 
-    def test_long_draft_fact_check_rechecks_short_groups(self):
+    def test_long_draft_fact_check_requires_revision_after_rejection(self):
         responses = [
             {"supported": False, "unsupported_claims": ["Unclear in long text"]},
             {"supported": True, "unsupported_claims": []},
@@ -269,9 +269,10 @@ class GateTests(unittest.TestCase):
         ]
         draft = "🧠 Новая модель\n\nЧто произошло: Выпущена модель. Она работает локально. Авторы описали ограничения.\n\nПростыми словами: Модель запускается на своём компьютере."
         with patch("ainews.pipeline.ollama_json", side_effect=responses) as model:
-            verify_draft({"model": "local", "ollama_url": "http://localhost"}, "Release",
-                         "The model runs locally and has limitations.", draft)
-        self.assertEqual(model.call_count, 3)
+            with self.assertRaisesRegex(ValueError, "Unclear in long text"):
+                verify_draft({"model": "local", "ollama_url": "http://localhost"}, "Release",
+                             "The model runs locally and has limitations.", draft)
+        self.assertEqual(model.call_count, 1)
 
 
 class StoreTests(unittest.TestCase):
