@@ -114,7 +114,8 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
     selected["what"].append(sections["what"][0])
     # Conditions must survive shortening; omit the item if they do not fit.
     important = re.compile(r"(?i)\b(?:только|ограничен\w*|предварительн\w*|тестов\w*|"
-                           r"параллел\w*|суммарн\w*|одновременн\w*|"
+                           r"параллел\w*|суммарн\w*|одновременн\w*|токен\w*\s*(?:в\s+секунд\w*|/с)|"
+                           r"GPU|NVFP\d+|BF16|FP16|FP8|INT8|"
                            r"платн\w*\s+тариф\w*|подписчик\w*|"
                            r"размеченн\w*|не\s+означает|по\s+(?:оценке|данным|сообщению)|"
                            r"сообщ\w*|заяв\w*|в\s+(?:их|этих)\s+тестах)\b")
