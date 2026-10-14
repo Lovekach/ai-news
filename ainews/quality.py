@@ -14,7 +14,7 @@ def freshness_hours(config: dict, source: dict) -> int:
 _ENTITY = re.compile(
     r"\b(?:GPT[ -]?\d+(?:\.\d+)*(?:\s+(?:Sol|Astra|Luna))?|"
     r"Claude\s+(?:Sonnet|Opus|Haiku)\s+\d+(?:\.\d+)*|"
-    r"Gemini\s+\d+(?:\.\d+)*(?:\s+Argon)?|Qwen\d+(?:\.\d+)*(?:-\d+B)?|"
+    r"Gemini\s+\d+(?:\.\d+)*(?:\s+Argon)?|Qwen\d+(?:\.\d+)*(?:-\d+B(?:-A\d+B)?)?|"
     r"Mistral\s+(?:Large|Medium|Small)\s+\d+(?:\.\d+)*|"
     r"DeepSeek[ -]?(?:V|R)\d+(?:\.\d+)*|GLM[ -]?\d+(?:\.\d+)*|MiniMax[ -]?M\d+(?:\.\d+)*|"
     r"Ideogram\s+\d+(?:\.\d+)*|SynthID\s+Bio|ProvenanceGuard|Kumo\s+Tabular|"
@@ -22,12 +22,30 @@ _ENTITY = re.compile(
     r"Hermes(?:\s+Agent)?|DigUp|NeatLogs|Le\s+Chonk)\b", re.I)
 
 
-def event_signature(headline: str, body: str) -> tuple[str, str, str] | None:
+_VERSIONED_PRODUCT = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z]+)?[ -]v?\d+(?:\.\d+)+(?:-[A-Za-z0-9]+)*\b|"
+    r"\b[A-Za-z][A-Za-z0-9]*\d+\.\d+(?:-[A-Za-z0-9]+)*\b")
+_NAMED_INDEX = re.compile(r"\b(?!(?:Introducing|Announcing|The)\b)(?:[A-Z][A-Za-z]+[ -]){1,4}(?:Index|Benchmark)\b")
+
+
+def event_signature(headline: str, body: str) -> tuple[str, str, str, str] | None:
     """Use the main subject and event type, not competitor names in the body."""
-    match = _ENTITY.search(headline) or _ENTITY.search(body)
+    # A competitor mentioned in the body cannot become the main subject.
+    subjects = [match for match in (_ENTITY.search(headline), _VERSIONED_PRODUCT.search(headline),
+                                    _NAMED_INDEX.search(headline)) if match]
+    match = min(subjects, key=lambda found: found.start()) if subjects else None
+    if not match and len(body) <= 120 and not re.search(
+            r"\b(?:vs|uses?|like|comparison|compared)\b|срав|например|использ", body, re.I):
+        candidates = list(_ENTITY.finditer(body))
+        if len(candidates) == 1:
+            match = candidates[0]
     if not match:
         return None
     entity = re.sub(r"[\s-]+", " ", match.group().casefold())
+    if _NAMED_INDEX.fullmatch(match.group()):
+        version = re.search(re.escape(match.group()) + r"\s+v?(\d+(?:\.\d+)+)", headline + ' ' + body, re.I)
+        if version:
+            entity += ' ' + version[1]
     # The headline identifies the event. The body may mention unrelated tests
     # or competing models, which must not turn every item into a pricing event.
     title = headline.casefold()
@@ -36,14 +54,19 @@ def event_signature(headline: str, body: str) -> tuple[str, str, str] | None:
         focus = "cyber"
     elif re.search(r"цен|стоим|дешев|дешёв|эконом|выгод|cost|price", title):
         focus = "pricing"
-    elif re.search(r"бенчмарк|benchmark|dense.?200|grounding", title):
+    elif re.search(r"бенчмарк|benchmark|dense.?200|grounding|decision index", title):
         focus = "benchmark"
     elif re.search(r"рейтинг|занял|заняла|место|arena|leaderboard", title):
         focus = "ranking"
-    elif re.search(r"доступ|платформ|api|вес\w*\s+откры|available", title):
-        focus = "availability"
     elif re.search(r"исправ|ошибк|patch|fix", title):
         focus = "fix"
+    elif re.search(r"обнов|update|upgrade", title):
+        focus = "update"
+    elif re.search(r"new model|model release|новая модель|новый релиз", title):
+        focus = "announcement"
+    elif re.search(r"доступ|платформ|api|вес\w*\s+откры|available|comes to|"
+                   r"(?:добавлен\w*|откр\w*).{0,60}(?:прилож|разработчик)|в\s+приложение", title):
+        focus = "availability"
     else:
         focus = "announcement"
     provider = ""
@@ -55,7 +78,10 @@ def event_signature(headline: str, body: str) -> tuple[str, str, str] | None:
     if entity.startswith("hermes"):
         version = re.search(r"\bv?(\d+\.\d+\.\d+)\b", headline + " " + body)
         entity = "hermes agent" + (" " + version[1] if version else "")
-    return entity, focus, provider
+    brand = re.split(r"[\s\d]", entity)[0]
+    company = {"gpt": "openai", "claude": "anthropic", "gemini": "google",
+               "qwen": "alibaba", "lfm": "liquidai"}.get(brand, brand)
+    return company, entity, focus, provider
 
 
 def source_window(text: str, limit: int = 7000) -> str:
@@ -84,17 +110,27 @@ def source_window(text: str, limit: int = 7000) -> str:
 
 def editorial_context(config: dict) -> str:
     """Provenance is not authorship; dates describe their actual meaning."""
-    return (f"\nURL первоисточника: {config.get('_source_url', 'не указан')}"
+    provenance = (f"\nURL первоисточника: {config.get('_source_url', 'не указан')}"
             f"\nАккаунт сообщения (не обязательно разработчик): {config.get('_source_author', 'не установлен')}"
             f"\nДата публикации сообщения: {config.get('_source_published', 'не установлена')}"
             f"\nДата публикации материала: {config.get('_original_published') or 'не установлена'}"
+            f"\nКалендарная дата выпуска (МСК): {config.get('_edition_date') or 'не указана'}")
+    return (provenance +
             "\nДата обнаружения не доказывает дату события. Не называй старый продукт новым релизом "
             "по сегодняшнему репосту. Если дата события неизвестна, не выдумывай её. "
             "Автор комментария, автор цитаты, разработчик модели и разработчик приложения — разные роли. "
             "Не объявляй комментатора основателем или инвестором без прямого подтверждения. "
             "В заголовке называй конкретный продукт, не только номер версии. "
             "Вендорский benchmark — заявление автора: сохраняй атрибуцию, метрику, единицы, "
-            "название теста и условия сравнения; score не означает точность или универсальное превосходство.\n")
+            "название теста и условия сравнения; score не означает точность или универсальное превосходство. "
+            "Tokens — токены, characters — символы, parameters — параметры. Reasoning-only — режим рассуждений, "
+            "а не запрет обычных задач или agent-only. Суммарный throughput при высокой параллельности "
+            "не равен скорости одного ответа. Сохраняй устройство, batch/concurrency, методику и базу сравнения "
+            "в том же предложении, что результат. Лидер суммарного индекса не обязательно самый быстрый или дешёвый. "
+            "Лидерство ограничивай классом участников и конкретным тестом. Decision models — модели принятия решений, "
+            "а не «решения ИИ». Автор вложенной цитаты не меняет автора внешнего комментария. "
+            "Модель не называй готовым агентом. Поддержка библиотеки не доказывает публикацию исходного кода модели. "
+            "Для нового оборудования сохраняй интерфейс и охлаждение, если они указаны.\n")
 
 
 def dated_recap(source: str) -> bool:
@@ -134,8 +170,118 @@ def same_event(headline: str, body: str, previous: list[tuple[str, str]]) -> boo
     return current is not None and any(current == event_signature(h, b) for h, b in previous)
 
 
+def comparison_attributed(source: str, draft: str) -> bool:
+    if re.search(r"по (?:данным|оценке|сообщению)|сообщ\w*|заяв\w*|собственн\w* тест|"
+                 r"в\s+(?:е[её]|их|своих|этих)\s+тестах|"
+                 r"(?:измерен\w*|получен\w*|оценен\w*|оценён\w*)\s+разработчик\w*|"
+                 r"разработчик\w*\s+(?:оценил\w*|измерил\w*|проверил\w*|получил\w*|провел\w*|провёл\w*)", draft, re.I):
+        return True
+    # Naming the evaluator's index is also attribution, without forcing a
+    # repetitive 'the author states' preface. Extract the name from evidence.
+    owners = re.findall(r"\b((?:[A-Z][A-Za-z]+\s+){1,3}?)(?:Decision Index|Cyber Index|Index|Benchmark)\b", source)
+    return bool(re.search(r"индекс|тест|бенчмарк|рейтинг", draft, re.I)
+                and any(owner.strip().casefold() in draft.casefold() for owner in owners))
+
+
+def measurement_issues(source: str, draft: str) -> list[str]:
+    """Report all measurement objections together for a bounded revision."""
+    s, d = source.casefold(), draft.casefold()
+    issues = []
+    if re.search(r"open[- ]weights?\b", s) and not re.search(r"source code|open[- ]source", s):
+        if re.search(r"(?:откр\w*.{0,55}(?:исходн\w*\s+код|код)|исходн\w*\s+код.{0,40}откр)|"
+                     r"установ\w*.{0,20}из\s+исходн\w*\s+код", d):
+            issues.append("Open weights do not establish release of source code")
+    # These guards concern measurement meanings, never a particular product.
+    normalized = re.sub(r"\bтыс\.\s*", "тыс ", d)
+    for name, source_noun, draft_noun in (
+            ('Context', r'context (?:window|length)', r'контекст'),
+            ('Vocabulary', r'vocabulary', r'словар\w*')):
+        source_unit = re.search(source_noun + r"[^.\n]{0,140}?\b(tokens|characters)\b", s)
+        draft_unit = re.search(draft_noun + r"[^.!?\n]{0,140}?(токен|символ)", normalized)
+        if source_unit and source_unit[1] == 'tokens' and draft_unit and draft_unit[1] == 'символ':
+            issues.append(f"{name} measured in tokens was rewritten as characters")
+    if "reasoning-only" in s and not re.search(r"agent[- ]only|only (?:as )?an? agent", s):
+        if re.search(r"только\s+(?:как\s+)?агент|исключительно\s+(?:как\s+)?агент", d):
+            issues.append("Reasoning-only does not mean agent-only")
+    experts = re.search(r"\b(\d+)\s+experts per (?:moe )?block", s)
+    if experts and int(experts[1]) < 100 and re.search(r"сот\w*\s+(?:нейросет|эксперт|блок)", d):
+        issues.append(f"Expert count per block was inflated into hundreds: в источнике {experts[1]} экспертов на блок, не сотни")
+    if experts:
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", d):
+            if (re.search(r"\b" + experts[1] + r"\s+эксперт", sentence)
+                    and not re.search(r"блок|сло[еяй]|moe", sentence)):
+                issues.append("Experts per block were described as the entire model's experts: укажи, что число экспертов относится к каждому MoE-блоку")
+    routing = re.search(r"top[- ](\d+) routing", s)
+    if routing:
+        words = {'два': 2, 'две': 2, 'три': 3, 'четыре': 4, 'пять': 5, 'шесть': 6, 'семь': 7, 'восемь': 8}
+        counts = re.findall(r"активн\w*\s+(?:(?:лишь|только|всего)\s+)?"
+                            r"(\d+|два|две|три|четыре|пять|шесть|семь|восемь)(?=[,.]|\s+(?:эксперт|блок|нейросет))", d)
+        if any(words.get(count, int(count) if count.isdigit() else -1) != int(routing[1]) for count in counts):
+            issues.append(f"Expert routing count changed: для каждого токена выбираются {routing[1]} эксперта; миллиарды активных параметров — другая величина")
+    parallel_rate = re.search(r"(\d+(?:\.\d+)?)\s*k?\s+(?:output )?tokens per second[^.\n]{0,100}high concurrency", s)
+    if parallel_rate:
+        number = parallel_rate[1]
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", re.sub(r"\bтыс\.\s*", "тыс ", d)):
+            if re.search(r"(?<!\d)" + re.escape(number) + r"\s*(?:тыс\w*\.?|k|000)?\s*(?:выходн\w*\s+)?токен", sentence):
+                if not re.search(r"параллел|одновременн|суммарн", sentence):
+                    issues.append("Aggregate throughput omits high-concurrency conditions: укажи суммарную скорость при параллельных запросах, а не при высокой нагрузке")
+                hardware = re.search(r"\b[abh]\d{3}\b", s[parallel_rate.start():parallel_rate.end()+80])
+                if hardware and hardware[0] not in sentence:
+                    issues.append("Throughput claim omits the measured hardware")
+    latency = re.search(r"latency[^.\n]{0,40}?(\d+)\s*ms\b", s)
+    if latency and re.search(r"задержк[^\n]{0,40}\b" + latency[1] + r"\s*секунд", d):
+        issues.append("Latency milliseconds were rewritten as seconds")
+    for count in re.findall(r"\b(\d+(?:\.\d+)?)\s*b\s+(?:(?:active|total)\s+)?parameters", s):
+        if re.search(r"\b" + re.escape(count) + r"\s*млрд\s+(?:активн\w*\s+)?(?:токен|символ)", d):
+            issues.append("Parameter count was rewritten as tokens or characters")
+    batches = set(re.findall(r"(?:batch size|concurrency)\s*(?:of|=|:)?\s*(\d+)", s))
+    if len(batches) == 1 and re.search(r"токен\w*\s*(?:в|/)\s*секунд|токен/с", d):
+        batch = next(iter(batches))
+        if not re.search(r"(?:пакет|батч|batch|параллел|одновременн)[^\n]{0,35}\b" + batch + r"\b", d):
+            issues.append("Throughput claim omits the stated batch size or concurrency")
+    if re.search(r"we (?:evaluated|report)|our benchmarks", s) and re.search(r"\b(?:лучш\w*|превосход\w*|быстрее|лидир\w*)", d):
+        if not comparison_attributed(source, draft):
+            issues.append("Vendor comparison needs explicit measurement attribution: результаты измерены разработчиками, добавь эту атрибуцию к сравнению")
+    # For a brief hardware announcement, concrete compatibility details take
+    # precedence over a generic promise of more choice. Long mixed articles
+    # need editorial selection rather than mandatory retention of every spec.
+    if len(source) < 1200 and re.search(r"gpu|graphics|видеокарт", s):
+        interface = re.search(r"\bpcie\s+(\d+(?:\.\d+)?)", s)
+        if interface and not re.search(r"pcie\s+" + re.escape(interface[1]), d):
+            issues.append("Brief hardware story omits the stated PCIe interface")
+        if 'air-cooled' in s and not re.search(r"воздушн\w*\s+охлажд[её]н|охлажд[её]н\w*\s+воздух", d):
+            issues.append("Brief hardware story omits air cooling")
+    # The source can explicitly name different winners for cost and latency.
+    # Do not transfer those extrema to the overall index leader in a headline.
+    title = d.splitlines()[0]
+    subject = _VERSIONED_PRODUCT.search(title)
+    winners = re.findall(r"([a-z][\w-]*(?:\s+v?\d+(?:\.\d+)*(?:\s+\d+b)?)?(?:\s+decision)?)\s+"
+                         r"(?:has|is) the (lowest|fastest)", s)
+    for winner, dimension in winners:
+        if not subject or winner.split()[0] in subject.group().casefold():
+            continue
+        expression = r"(?:сам\w*\s+деш[её]в|лид\w*[^.!?]{0,70}цен)" if dimension == "lowest" else r"(?:сам\w*\s+быстр|лид\w*[^.!?]{0,70}скорост)"
+        if re.search(expression, title):
+            issues.append("Overall index leadership was rewritten as a cost or speed record")
+    index_scores = re.findall(r"\bscores (\d+(?:\.\d+)?) on the ([^.\n]+? index)\b", s)
+    for number, index_name in index_scores:
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", d):
+            test = re.search(r"(?:тесте|бенчмарке)\s+([a-z][\w-]+)", sentence)
+            if (test and test[1] in s and test[1] not in index_name
+                    and re.search(r"\b" + re.escape(number) + r"\s+балл", sentence)):
+                issues.append(f"Aggregate index score was assigned to a different subtest: {number} — балл {index_name}, не {test[1]}; исправь название метрики, сохрани число")
+    if (re.search(r"now (?:globally )?available|comes to", s)
+            and not re.search(r"new model|introducing|(?:we |today.{0,20})(?:release|launch)|released today", s)
+            and re.search(r"выпустил\w*\s+(?:нов\w*\s+)?модель", d)):
+        issues.append("Availability announcement was rewritten as a model release: доступность не доказывает выпуск новой модели")
+    return issues
+
+
 def check_semantic_claims(source: str, draft: str) -> None:
     s, d = source.casefold(), draft.casefold()
+    issues = measurement_issues(source, draft)
+    if issues:
+        raise ValueError("; ".join(issues))
     if 'artificial analysis' in s and re.search(r"тест\w*.{0,35}искусственн\w*\s+анализ", d):
         raise ValueError("Artificial Analysis is a proper name, not a translated test description")
     if 'release gap' in s and re.search(r"недел\w*\s+до\s+(?:релиза|выхода)\s+предшественника", d):
@@ -191,9 +337,9 @@ def check_semantic_claims(source: str, draft: str) -> None:
         if not re.search(r"accuracy|точност", s):
             raise ValueError("Benchmark score incorrectly interpreted as accuracy")
     if re.search(r"ahead of|outperform|benchmark.{0,80}\d+(?:\.\d+)?%", s) and re.search(r"бенчмарк|тест\w*|dense[ -]?200", d):
-        if not re.search(r"по (?:данным|оценке|сообщению)|сообщ\w*|заяв\w*|собственн\w* тест", d):
+        if not comparison_attributed(source, draft):
             raise ValueError("Benchmark comparison lacks source attribution")
-    if re.search(r"open[- ]weights", s) and not re.search(r"source code|open[- ]source", s):
+    if re.search(r"open[- ]weights?\b", s) and not re.search(r"source code|open[- ]source", s):
         if re.search(r"(?:откр\w*.{0,55}(?:исходн\w*\s+код|код)|исходн\w*\s+код.{0,40}откр)", d):
             raise ValueError("Open weights do not establish release of source code")
     if re.search(r"(?:table of |table with |context rows with )labeled|rows with (?:their )?labels", s):
