@@ -130,7 +130,12 @@ def editorial_context(config: dict) -> str:
             "Лидерство ограничивай классом участников и конкретным тестом. Decision models — модели принятия решений, "
             "а не «решения ИИ». Автор вложенной цитаты не меняет автора внешнего комментария. "
             "Модель не называй готовым агентом. Поддержка библиотеки не доказывает публикацию исходного кода модели. "
-            "Для нового оборудования сохраняй интерфейс и охлаждение, если они указаны.\n")
+            "Для нового оборудования сохраняй интерфейс и охлаждение, если они указаны. "
+            "Число GPU, формат весов и per-user throughput сохраняй рядом с результатом. "
+            "Max/xhigh — настройки рассуждений одной модели, если источник не говорит иначе. "
+            "Заявленный максимум контекста не равен проверенной длине. "
+            "Мнение и демонстрацию автора обозначай как мнение и демонстрацию, не как анонс. "
+            "Не копируй инструкции проверки в текст. Разности и коэффициенты не вычисляй приблизительно на глаз.\n")
 
 
 def dated_recap(source: str) -> bool:
@@ -183,10 +188,142 @@ def comparison_attributed(source: str, draft: str) -> bool:
                 and any(owner.strip().casefold() in draft.casefold() for owner in owners))
 
 
+def relational_issues(source: str, draft: str) -> list[str]:
+    """Conservative checks for explicit relations, not a bag of known numbers.
+
+    Only evaluate unambiguous expressions. Ambiguous tables and prose still
+    require the existing source verifier; never infer a missing measurement.
+    """
+    s, d = source.casefold(), draft.casefold()
+    issues = []
+    number = r"\d+(?:[.,]\d+)?"
+    def value(text):
+        return float(text.replace(',', '.'))
+    for a, b, result in re.findall('(' + number + r')\s*[−–-]\s*(' + number +
+                                  r')\s*=\s*(' + number + ')', d):
+        if abs(value(a) - value(b) - value(result)) > .01:
+            issues.append('Incorrect explicit subtraction')
+    difference = ('(' + number + r')\s+балл\w*[^\n]{0,110}?на\s+(' + number +
+                  r')\s+балл\w*\s+(ниже|выше)[^\n]{0,100}?(' + number + r')\s+балл')
+    for first, delta, direction, second in re.findall(difference, d):
+        expected = value(second) - value(first) if direction == 'ниже' else value(first) - value(second)
+        if abs(expected - value(delta)) > .01:
+            issues.append('Score difference contradicts the stated endpoints')
+    prices = {value(p) for p in re.findall(r'\$(' + number + ')', source)}
+    if len(prices) == 2 and min(prices) > 0 and 'per task' in s:
+        ratio = max(prices) / min(prices)
+        words = {'двух': 2, 'трех': 3, 'трёх': 3, 'четырех': 4, 'четырёх': 4,
+                 'пяти': 5, 'шести': 6, 'семи': 7, 'восьми': 8}
+        factors = re.findall(r'(двух|тр[её]х|четыр[её]х|пяти|шести|семи|восьми)кратн\w*\s+эконом', d)
+        factors += re.findall(r'(?:дешевле|эконом\w*)\s+в\s+(' + number + r')\s+раз', d)
+        for factor in factors:
+            claimed = words[factor] if factor in words else value(factor)
+            if abs(claimed - ratio) > max(.15, ratio * .05):
+                issues.append('Cost ratio contradicts the two stated per-task prices')
+        for saving in re.findall(r'эконом\w*[^.!?\n]{0,25}?(' + number + r')\s*%', d):
+            if abs(value(saving) - (1 - min(prices) / max(prices)) * 100) > 1:
+                issues.append('Cost saving percentage contradicts the stated prices')
+    if re.search(r'\bxhigh\b', s) and re.search(r'\b(?:max effort|at max|effort)\b', s):
+        if re.search(r'(?:модель|версия)\s+xhigh|между[^\n]{0,70}\s+и\s+xhigh', d):
+            issues.append('Reasoning effort was presented as a separate model: xhigh и max — настройки одной модели')
+        if re.search(r'\bmax generates\b', s) and re.search(r'xhigh[^.!?\n]{0,50}генерир\w*[^\n]{0,40}больше', d):
+            issues.append('Output-token comparison reversed max and xhigh')
+    if re.search(r'тариф|подписчик', d) and not re.search(r'\b(?:pricing|prices?|costs?|subscriptions?|subscribers?|plans?|tiers?)\b|тариф|подпис', s):
+        issues.append('Unrelated access or pricing claim absent from this source')
+    if re.search(r'(?:up to|maximum)\s+\d+\s*(?:m|k|million).*context', s):
+        positive = re.sub(r'\bне\s+(?:проверенн\w*|подтвержд[её]нн\w*)', '', d)
+        if not re.search(r'verified|tested|validated|проверен|подтвержден', s) and re.search(r'проверенн\w*|подтвержд[её]нн\w*', positive):
+            issues.append('Advertised context maximum presented as independently verified')
+        if re.search(r'контекст', d) and not re.search(r'заяв\w*|по\s+(?:данным|сообщению)|сообщ\w*|обещ\w*', d):
+            issues.append('Advertised context maximum needs source attribution')
+        def context_size(raw, unit):
+            return float(raw.replace(',', '.')) * {'k': 1000, 'тыс': 1000, 'm': 1000000,
+                                                    'million': 1000000, 'млн': 1000000}.get(unit, 1)
+        measured = re.findall(r'(?:tested|verified|validated)[^.\n]{0,60}?(' + number +
+                              r')\s*(k|m|million)?\s*(?:tokens|context)', s)
+        asserted = re.findall(r'(?:проверенн\w*|подтвержд[её]нн\w*)[^.\n]{0,60}?(' + number +
+                              r')\s*(тыс|млн|k|m)?\s*(?:токен|контекст)', positive)
+        if measured and any(context_size(a, u) not in {context_size(b, v) for b, v in measured}
+                            for a, u in asserted):
+            issues.append('Verified context length differs from the tested length in source')
+    if re.search(r'\bi think\b|should developers|my opinion', s):
+        if not re.search(r'считает|по мнению|мнение|рассужда|автор\s+(?:отмечает|полагает|пишет)', d):
+            issues.append('Developer opinion presented without attribution')
+        headline = d.splitlines()[0]
+        if (re.search(r'не\s+заменит|защищает\s+от\s+монопол|гарантир', headline)
+                and not re.search(r'мнение|считает|рассужда|по мнению', headline)):
+            issues.append('Opinion headline makes an unconditional prediction')
+    # Bind a throughput headline to its measured configuration, even if the
+    # sentence containing the actual result disappeared during compaction.
+    if re.search(r'tokens(?:/s| per second)|tok/s', s) and re.search(r'токен\w*\s*(?:в\s+секунд|/с)', d):
+        gpu = re.search(r'\b(\d+)\s*[×x-]\s*(?:nvidia\s+)?([a-z]+\d{3})\b', s)
+        if gpu:
+            count, hardware = gpu.groups()
+            words = {'2': 'двумя|двух|две', '4': 'четырьмя|четыр[её]х|четыре', '8': 'восемью|восьми|восемь'}
+            configuration = r'\b(?:' + count + '|' + words.get(count, count) + r')\b[^.!?\n]{0,55}\b' + hardware + r'\b'
+            if not re.search(configuration, d):
+                issues.append('Throughput claim omits the measured GPU count or hardware')
+        if 'per user' in s and not re.search(r'на\s+(?:одного\s+)?пользовател|для\s+одного\s+пользовател', d):
+            issues.append('Per-user throughput lost its per-user scope')
+        formats = set(re.findall(r'\b(?:nvfp\d+|bf16|fp16|fp8|int8)\b', s))
+        if len(formats) == 1 and next(iter(formats)) not in d:
+            issues.append('Throughput claim omits its precision format')
+        if (not re.search(r'concurren|parallel|batch|одновременн|параллел', s)
+                and re.search(r'одновременн\w*|параллел\w*', d)):
+            issues.append('Throughput statement invents parallel workload conditions not given in source')
+    if re.search(r'day[- ]0 support', s) and re.search(r'технологи\w*\s+day[- ]0', d):
+        issues.append('Day-zero support is a release timing, not a separate technology')
+    if (re.search(r'moe|active per token|active parameters', s)
+            and not re.search(r'fast|cheap|speed|cost|throughput|benchmark', s)
+            and re.search(r'быстр\w*[^.!?\n]{0,35}деш[её]в|деш[её]в\w*[^.!?\n]{0,35}быстр', d)):
+        issues.append('Sparse active parameters alone do not establish speed and cost claims')
+    if (re.search(r'vulnerabilit|уязвим', s) and not re.search(r'fixed|patched|resolved|исправ|устран', s)
+            and re.search(r'(?:исправ\w*|устран\w*)[^.!?\n]{0,45}уязвим', d)):
+        issues.append('Vulnerability disclosure does not establish that vulnerabilities were fixed')
+    for score in re.findall(r'лидир\w*\s+с\s+(' + number + r')\s+балл', d):
+        ranks = re.findall(r'at\s+#(\d+)\s+with\s+' + re.escape(score) + r'\s+pts', s)
+        if ranks and '1' not in ranks:
+            issues.append('Leaderboard score assigned to a non-leading model as leader')
+    # A nearby true number cannot be transferred to a different comparator.
+    # Restrict this to explicitly named versioned products and point deltas.
+    comparators = {}
+    for match in re.finditer('(' + number + r')\s+pts?\s+(?:above|behind|below|of|ahead of)\s+', source, re.I):
+        tail = source[match.end():match.end()+90]
+        subject = _VERSIONED_PRODUCT.search(tail) or _ENTITY.search(tail)
+        if subject:
+            key = match[1].replace(',', '.')
+            comparators.setdefault(key, set()).add(re.sub(r'[\s-]+', ' ', subject[0].casefold()))
+    for sentence in re.split(r'\n|(?<=[.!?])\s+', draft):
+        relation = re.search(r'(?:оперед\w*|обош\w*|уступ\w*|отстав\w*)[^\n]{0,100}?на\s+('
+                             + number + r')\s+(?:пункт|очк|балл)', sentence, re.I)
+        if not relation or relation[1].replace(',', '.') not in comparators:
+            continue
+        prefix = sentence[relation.start():relation.end()]
+        subject = _VERSIONED_PRODUCT.search(prefix) or _ENTITY.search(prefix)
+        if subject and re.sub(r'[\s-]+', ' ', subject[0].casefold()) not in comparators[relation[1].replace(',', '.')]:
+            issues.append('Point difference was transferred to a different comparison model')
+    return issues
+
+
+def derived_numbers(source: str, draft: str) -> set[str]:
+    """Allow only checked score differences whose endpoints occur in source."""
+    number = r'\d+(?:[.,]\d+)?'
+    known = {n.replace(',', '.') for n in re.findall(number, source)}
+    derived = set()
+    pattern = ('(' + number + r')\s+балл\w*[^\n]{0,110}?на\s+(' + number +
+               r')\s+балл\w*\s+(ниже|выше)[^\n]{0,100}?(' + number + r')\s+балл')
+    for first, delta, direction, second in re.findall(pattern, draft.casefold()):
+        first, delta, second = (n.replace(',', '.') for n in (first, delta, second))
+        expected = float(second) - float(first) if direction == 'ниже' else float(first) - float(second)
+        if first in known and second in known and abs(expected - float(delta)) < .01:
+            derived.add(delta)
+    return derived
+
+
 def measurement_issues(source: str, draft: str) -> list[str]:
     """Report all measurement objections together for a bounded revision."""
     s, d = source.casefold(), draft.casefold()
-    issues = []
+    issues = relational_issues(source, draft)
     if re.search(r"open[- ]weights?\b", s) and not re.search(r"source code|open[- ]source", s):
         if re.search(r"(?:откр\w*.{0,55}(?:исходн\w*\s+код|код)|исходн\w*\s+код.{0,40}откр)|"
                      r"установ\w*.{0,20}из\s+исходн\w*\s+код", d):

@@ -117,8 +117,9 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
             # Never collapse different explicit model versions or event types.
             if ((signature is not None and signature == other_signature) or
                 (signature is None and other_signature is None
-                 and duplicate_story(fields["headline"], [latest["headline"]])
-                 and duplicate_title(row["summary"], [group[0]["summary"]]))):
+                 and (linked_announcement(row, group[0]) or
+                      (duplicate_story(fields["headline"], [latest["headline"]])
+                       and duplicate_title(row["summary"], [group[0]["summary"]]))))):
                 group.append(row)
                 break
         else:
@@ -127,8 +128,26 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
     return result, discarded
 
 
+def linked_announcement(left, right) -> bool:
+    """A notice linking the exact official article is the same announcement.
+
+    Only a single external article link qualifies, and this fallback is used
+    when neither item has a distinct product/event signature.
+    """
+    for notice, article in ((left, right), (right, left)):
+        host = (urlparse(article['url']).hostname or '').casefold()
+        if host in {'x.com', 'twitter.com', 't.me'} or not host:
+            continue
+        links = re.findall(r'https?://[^\s<>]+', notice['summary'] or '')
+        external = {link.rstrip('.,)/') for link in links
+                    if (urlparse(link).hostname or '').casefold() not in {'x.com', 'twitter.com', 't.me'}}
+        if external == {article['url'].rstrip('/')}:
+            return True
+    return False
+
+
 def fingerprint(group: list) -> str:
-    content = ["quality-v3", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
+    content = ["quality-v4", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -407,6 +426,7 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     edition = compose_daily(config, store, current)
     for url, reason in edition.discarded:
         if reason.startswith("Quality review required"):
+            store.record_editorial(url, "final_quality_gate", {"state": "needs_review", "reason": reason})
             store.set_state(url, "needs_review", error=reason)
     safe_discarded = [(u, r) for u, r in edition.discarded if not r.startswith("Quality review required")]
     report = [f"Daily Digest candidates: {len(candidates(store, current, ('ready',)))}",

@@ -91,6 +91,29 @@ reasons in the local database. Previously approved drafts, merged drafts and
 shortened Telegram cards pass deterministic checks again before sending. Failed
 stories are held for review; they do not make an empty post publishable.
 
+Relational checks also reject incorrect score differences, unsupported per-task
+cost ratios and savings, effort settings presented as separate models, reversed
+max/xhigh output comparisons, and a non-leading rank described as the leader.
+Only arithmetic with explicit endpoints is checked; ambiguous tables remain a
+verifier responsibility. A new score difference may pass numeric-presence checks
+only when both source endpoints and the arithmetic agree.
+
+Throughput claims retain the stated GPU count, device, precision and per-user
+scope. Parallel workloads cannot be inferred from a per-user rate. Advertised
+context maxima retain attribution and are distinct from explicitly tested
+lengths. A disclosure alone does not establish a vulnerability fix; day-zero
+support is not a separate technology. Opinions retain attribution. Access or
+pricing statements without corresponding source evidence are held, including
+editorial instructions accidentally copied into prose.
+
+Final checks run per card before and after compaction. A failed card receives
+`needs_review` and a private `final_quality_gate` audit record; other qualifying
+cards can still publish. Compaction keeps the benchmark result sentence and its
+hardware conditions, or omits the card when those details cannot fit. An exact
+single article link can join a short notice to its official announcement when
+neither has a conflicting product/event signature. Multi-link roundups do not
+establish that identity.
+
 ## Edition and resources
 
 The existing publication schedule stays at 21:00 Europe/Moscow, once per day.
