@@ -14,7 +14,7 @@ It is designed for a personal Windows laptop: collection does not call the LLM, 
 - SQLite queues, source cursors, drafts and publication receipts.
 - Structured local LLM generation, evidence checks, numeric and semantic guards, and a second LLM verification pass. Uncertain claims go to `needs_review`.
 - Daily grouping of related events and selection of the latest verified state. A failed merge falls back to an individually approved draft.
-- One Telegram message with sentence-aware compaction and source caveats preserved. A longer edition is archived locally.
+- One Telegram message without source URLs, with sentence-aware compaction and qualifying conditions preserved. A longer edition with sources is archived privately.
 - Transactional edition reservation and blocked automatic retries after ambiguous delivery.
 - Windows Task Scheduler integration with hidden, finite processes.
 
@@ -126,7 +126,7 @@ Discovery and permission checks do not publish messages. If several channels are
 
 These commands do not send a new post. `daily-prepare` runs the LLM and updates draft states. Initial official-feed polling establishes a baseline rather than processing its full backlog. Telegram/X initial scans consider recent visible entries. Collection cannot recover posts already missing from sources.
 
-Advertisements, speculation, prerelease builds and stale source articles are filtered. A third-party Telegram repost needs a supported primary-source link for automatic approval. Evidence stays local; aggregator links are omitted from the post while supported primary links can be included.
+Advertisements, speculation, prerelease builds and stale source articles are filtered. A third-party Telegram repost needs a supported primary-source link for automatic approval. Source URLs remain in SQLite, verification and the private archive. Telegram's public representation removes URL destinations and source blocks while keeping useful hyperlink labels. Domain-shaped product labels remain visible with auto-linking disabled. The Telegram transport checks the final payload again before calling the API.
 
 LLM verification and rule checks reduce errors; they do not independently establish truth or guarantee detection of every factual error. Review questionable drafts before enabling publication.
 
@@ -151,7 +151,7 @@ powershell -NoProfile -File .\scripts\install_schedule.ps1 -PythonExecutable "$P
 
 The publisher accepts **20:56–21:04 MSK** and will not send outside this window. It selects approved materials dated within the current Moscow calendar day through its cutoff, groups related reports, retains the newest supported state, and prioritizes models, agents, research, open-source and developer tools. Yesterday's material is not imported into today's edition. News after the cutoff cannot be appended to an already sent edition.
 
-Telegram targets 3,900 UTF-16 units. When the complete edition cannot fit, lower-priority stories may be omitted from Telegram but remain in `output/daily/YYYY-MM-DD.json`. This private archive contains source identifiers. Empty editions are not posted. **Telegram is the only implemented publication adapter; X is a source, not a publication destination.**
+Telegram targets 3,900 UTF-16 units. When the complete edition cannot fit, lower-priority stories may be omitted from Telegram but remain in `output/daily/YYYY-MM-DD.json`. This private archive contains source identifiers and the exact public text. Bare product identifiers and incomplete sentences are held for review. A JSON string limited by the generation schema can be unfinished even when the JSON itself is valid: only complete preceding sentences may proceed to the existing factual verifier. Empty editions are not posted. **Telegram is the only implemented publication adapter; X is a source, not a publication destination.**
 
 The laptop must be awake and the configured Windows user logged in. Publication has no late catch-up: missing the window will not trigger a post hours later.
 

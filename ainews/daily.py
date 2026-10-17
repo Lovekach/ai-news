@@ -13,7 +13,8 @@ from urllib.parse import urlparse
 from .digest import AD_TITLE, NEWS_SEPARATOR, card, parse_draft, published_in_window
 from .pipeline import (SCHEMA, align_evidence, draft_text, duplicate_story, duplicate_title,
                        canonical_title, ollama_json, prepare, revise_draft, telegram_evidence_url, verify_draft)
-from .quality import event_signature, draft_issues, source_window
+from .quality import event_signature, draft_issues, source_window, integrity_issues
+from .presentation import public_text, assert_public_text
 from .store import Store
 from .security import safe_error
 
@@ -260,6 +261,7 @@ class Edition:
     discarded: list[tuple[str, str]]
     stories: int
     selected: int
+    full_urls: list[str]
 
 
 def primary_links(config: dict, group: list) -> list[str]:
@@ -289,12 +291,13 @@ def primary_links(config: dict, group: list) -> list[str]:
 
 
 def fitted_card(fields: dict, links: list[str], budget: int) -> str:
-    suffix = "\n\n" + "\n".join(links) if links else ""
-    available = budget - units(suffix)
-    text = card(fields, max_chars=max(0, available), detail_first=True)
-    while text and units(text) > available:
-        text = card(fields, max_chars=len(text) - (units(text) - available), detail_first=True)
-    return text + suffix if text else ""
+    # Source links stay in the private edition and provenance, never consume
+    # the public budget. Also remove links embedded in an older draft's prose.
+    visible = {key: public_text(value) for key, value in fields.items()}
+    text = card(visible, max_chars=max(0, budget), detail_first=True)
+    while text and units(text) > budget:
+        text = card(visible, max_chars=len(text) - (units(text) - budget), detail_first=True)
+    return text
 
 
 def allocate_cards(cards: list, limit: int) -> list[tuple[str, list]]:
@@ -305,7 +308,7 @@ def allocate_cards(cards: list, limit: int) -> list[tuple[str, list]]:
     """
     selected = []
     for fields, group, links in cards:
-        full = card(fields, detail_first=True) + ("\n\n" + "\n".join(links) if links else "")
+        full = card({key: public_text(value) for key, value in fields.items()}, detail_first=True)
         weight = max(1, priority(group[0]))
         seed_budget = min(limit, max(420 if weight >= 5 else 260, units(full) if units(full) < 260 else 0))
         seed = fitted_card(fields, links, seed_budget)
@@ -366,14 +369,21 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
     checked = []
     for text, group in chosen:
         issues = draft_issues("\n".join(r["article"] or r["summary"] for r in group), text)
+        try:
+            assert_public_text(text, limit)
+        except ValueError as exc:
+            issues.append(str(exc))
         if issues:
             discarded.extend((r["url"], "Quality review required after shortening: " + "; ".join(issues)) for r in group)
         else:
             checked.append((text, group))
     chosen = checked
     telegram = NEWS_SEPARATOR.join(text for text, _ in chosen)
+    if telegram:
+        assert_public_text(telegram, limit)
     urls = [row["url"] for _, group in chosen for row in group]
-    return Edition(full, telegram, urls, discarded, len(cards), len(chosen))
+    return Edition(full, telegram, urls, discarded, len(cards), len(chosen),
+                   [row['url'] for _, group, _ in cards for row in group])
 
 
 def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | None = None) -> list[str]:
@@ -436,6 +446,11 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         for url, reason in safe_discarded:
             store.set_state(url, "skipped", error=reason)
         return report + ["No verified news: no empty post published"]
+    # Final preflight occurs before reservation/network: the ledger, archive
+    # and exact API payload must describe the same link-free, complete text.
+    assert_public_text(edition.telegram, min(3900, int(config.get('max_digest_chars', 3900))))
+    if any(integrity_issues(item) for item in edition.telegram.split(NEWS_SEPARATOR)):
+        return report + ['Public quality gate failed; no reservation or Telegram call']
     # Archive before any external send. It is reusable for platforms accepting
     # long text. Only Telegram is a connected publication adapter in this app.
     output = root / "output" / "daily"
@@ -443,7 +458,7 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     filename = output / (current.date().isoformat() + ".json")
     document = {"date": str(current.date()), "timezone": "Europe/Moscow", "cutoff": current.isoformat(),
                 "full_text": edition.full, "telegram_text": edition.telegram, "published_urls": edition.urls,
-                "full_edition_urls": [r["url"] for group in groups(config, store, current)[0] for r in group],
+                "full_edition_urls": edition.full_urls,
                 "stories": edition.stories, "selected": edition.selected,
                 "quality": {"findings": edition.discarded,
                             "unprocessed": len(candidates(store, current, ("pending",))),
@@ -453,7 +468,8 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
                                 "discovered_at": r["created_at"],
                                 "dates": dict(dates) if (dates := store.db.execute(
                                     "SELECT * FROM source_dates WHERE url=?", (r["url"],)).fetchone()) else None}
-                               for group in groups(config, store, current)[0] for r in group]}
+                               for url in edition.full_urls
+                               if (r := store.db.execute('SELECT * FROM items WHERE url=?', (url,)).fetchone())]}
     staged = filename.with_suffix(".tmp")
     staged.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     staged.replace(filename)

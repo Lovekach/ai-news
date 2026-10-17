@@ -46,12 +46,12 @@ class ProductionReadiness(unittest.TestCase):
         self.assertIn('128 тысяч токенов', text)
         self.assertNotIn('быстрее решать разные', text)
 
-    def test_official_source_links_survive_both_editions_without_tg_promotion(self):
+    def test_official_source_links_remain_private(self):
         self.config['sources'][0]['hosts'] = ['official.example']
         self.add('https://official.example/launch')
         edition = compose_daily(self.config, self.store, self.now)
         self.assertIn('https://official.example/launch', edition.full)
-        self.assertIn('https://official.example/launch', edition.telegram)
+        self.assertNotIn('https://', edition.telegram)
         self.assertLessEqual(units(edition.telegram), 3900)
 
     def test_tg_links_use_verified_primary_not_channel_link(self):
@@ -59,19 +59,19 @@ class ProductionReadiness(unittest.TestCase):
         self.add('https://t.me/channel/42')
         self.store.db.execute("UPDATE items SET summary='Текст с подтверждением https://github.com/example/tool/releases/tag/v1.0' WHERE url=?", ('https://t.me/channel/42',))
         self.store.db.commit()
-        text = compose_daily(self.config, self.store, self.now).telegram
-        self.assertIn('https://github.com/example/tool/releases/tag/v1.0', text)
-        self.assertNotIn('https://t.me/', text)
+        edition = compose_daily(self.config, self.store, self.now)
+        self.assertIn('https://github.com/example/tool/releases/tag/v1.0', edition.full)
+        self.assertNotIn('https://', edition.telegram)
 
     def test_link_overflow_does_not_cut_sentences_or_caveats(self):
         fields = {'headline': 'GPT-8 🧠', 'what': 'Модель выпущена для работы с документами.',
                   'caveat': 'Доступна только в тестовой версии.'}
         link = 'https://official.example/' + 'x' * 180
-        self.assertEqual(fitted_card(fields, [link], 150), '')
+        self.assertIn(fields['caveat'], fitted_card(fields, [link], 150))
         text = fitted_card(fields, [link], 400)
         self.assertIn(fields['what'], text)
         self.assertIn(fields['caveat'], text)
-        self.assertTrue(text.endswith(link))
+        self.assertNotIn(link, text)
         self.assertLessEqual(units(text), 400)
 
     def test_duplicate_primary_material_needs_only_one_link(self):
@@ -79,7 +79,8 @@ class ProductionReadiness(unittest.TestCase):
         self.add('https://official.example/one')
         self.add('https://official.example/two')
         edition = compose_daily(self.config, self.store, self.now)
-        self.assertEqual(edition.telegram.count('https://official.example/'), 1)
+        self.assertEqual(edition.full.count('https://official.example/'), 1)
+        self.assertNotIn('https://', edition.telegram)
         self.assertEqual(len(edition.urls), 2)
 
     def test_earlier_primary_article_is_not_republished_as_today(self):

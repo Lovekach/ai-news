@@ -171,7 +171,7 @@ class FinalGateIsolation(unittest.TestCase):
                       'measured': '500 токенов/с на пользователя на четырёх NVIDIA GB300 с NVFP4.'}
             for url in sources:
                 store.add_feed('official', [Entry('official', url, url, (now-timedelta(hours=1)).isoformat(), sources[url])], include_existing=True)
-                store.set_state(url, 'ready', article=sources[url], draft='🧠 '+url+'\n\nЧто произошло: '+drafts[url])
+                store.set_state(url, 'ready', article=sources[url], draft='🧠 Новость '+url+'\n\nЧто произошло: '+drafts[url])
             def broken_compaction(cards, limit):
                 return [(card(fields) if group[0]['url']=='good' else '- measured\n\n500 токенов/с.', group)
                         for fields, group, links in cards]
@@ -193,7 +193,7 @@ class FinalGateIsolation(unittest.TestCase):
                               ('bad', 'Доступность по всему миру не означает доступ для всех тарифов.')]:
                 store.add_feed('official', [Entry('official', url, url, (now - timedelta(hours=1)).isoformat(), 'GPU update.')], include_existing=True)
                 store.set_state(url, 'ready', article='GPU update.',
-                                draft='🧠 '+url+'\n\nЧто произошло: '+text)
+                                draft='🧠 Новость '+url+'\n\nЧто произошло: '+text)
             sender = Mock(return_value=12)
             publish_daily(config, store, root, now=now, token_reader=lambda: 'mock', sender=sender)
             publish_daily(config, store, root, now=now, token_reader=lambda: 'mock', sender=sender)

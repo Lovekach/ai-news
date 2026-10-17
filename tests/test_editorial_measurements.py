@@ -368,14 +368,14 @@ class RolloutTests(unittest.TestCase):
         fixed = {**bad, 'what_happened': 'Доступ открыт подписчикам приложения и платного API.'}
         with patch('ainews.daily.ollama_json', return_value=bad), \
              patch('ainews.daily.align_evidence', side_effect=lambda draft, source: draft), \
-             patch('ainews.daily.draft_text', side_effect=['bad text', 'fixed text']), \
+             patch('ainews.daily.draft_text', side_effect=['bad text.', 'fixed text.']), \
              patch('ainews.daily.verify_draft', side_effect=[ValueError('Access limited'), None]) as verify, \
              patch('ainews.daily.revise_draft', return_value=fixed) as revise:
             result = merge_stories(self.config, self.store, self.now)
         self.assertEqual(verify.call_count, 2)
         self.assertEqual(revise.call_count, 1)
         self.assertEqual(result, ['Merged verified story: 2 sources'])
-        self.assertEqual(self.store.db.execute('SELECT draft FROM daily_story_drafts').fetchone()[0], 'fixed text')
+        self.assertEqual(self.store.db.execute('SELECT draft FROM daily_story_drafts').fetchone()[0], 'fixed text.')
 
     def test_rollout_copy_preserves_complementary_conditions_without_new_prose(self):
         self.add('one', 'Nova 2.0 available in app', 'Приложение доступно подписчикам Pro.', 'Nova 2.0 app available to Pro subscribers.')

@@ -13,6 +13,7 @@ AI News is a local Windows application with separately scheduled collection, edi
 | `store` | SQLite items, polling state, drafts, edition ledger and corrections |
 | `pipeline` | Source polling, editorial prompts, evidence and model verification |
 | `quality` | Semantic guards, event signatures and repetition checks |
+| `presentation` | Public-only URL removal, visible hyperlink labels and Telegram payload checks |
 | `digest` | Draft parsing, sentence-aware card compaction and legacy interval helpers |
 | `daily` | Moscow day selection, grouping, verified merge cache, priority and output allocation |
 | `model_session` | Independent localhost Ollama server and owned-process cleanup |
@@ -34,10 +35,10 @@ Keep the ledger when moving an installation. A second copy with a fresh database
 
 1. Collect bounded feed/page data with timeouts, cache validators and source backoff. No LLM calls.
 2. Filter stale articles, promotion, unsupported reposts, speculation and prereleases during evening editing.
-3. Generate structured Russian drafts with evidence. Check numbers, access conditions and known semantic errors. A second model request verifies the text against that evidence.
+3. Generate structured Russian drafts with evidence. Remove only an unfinished tail before the existing style editor, numeric/semantic guards and LLM verification; an unfinished main event or caveat requires repair/review. Raw writer responses remain private. Product categories and no-loss quality guarantees require source evidence.
 4. Group current-day approved records by event signatures and similarity. Merges use the same checking pipeline; failure retains the latest approved draft.
-5. Archive the longer edition, and allocate Telegram's budget by importance. Concrete details and caveats take precedence over explanatory filler. Preserve complete sentences.
-6. Reserve a daily slot and send one Telegram message.
+5. Archive the longer edition with source URLs. Allocate Telegram's budget to public text without links. Concrete details and caveats take precedence over explanatory filler. Preserve complete sentences and their units.
+6. Check public text integrity and URL absence, reserve a daily slot and send one Telegram message. The transport validates the payload again. The saved Telegram text equals the sent payload.
 
 Coverage depends on source access. Checks do not independently verify every source assertion. Grouping may miss unusual wording or conflate ambiguous event descriptions.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .security import redact
+from .presentation import public_text, assert_public_text
 
 
 def read_token() -> str:
@@ -26,6 +27,10 @@ def read_token() -> str:
 
 
 def call(token: str, method: str, data: dict[str, Any] | None = None) -> Any:
+    if method in {'sendMessage', 'editMessageText'}:
+        assert_public_text(str((data or {}).get('text', '')))
+        if any(entity.get('type') in {'url', 'text_link'} for entity in (data or {}).get('entities', [])):
+            raise ValueError('Public Telegram payload contains link entities')
     request = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/{method}",
         data=json.dumps(data or {}, ensure_ascii=False).encode("utf-8"),
@@ -79,6 +84,8 @@ def check_channel_access(token: str, channel_id: int, *, expected_username: str 
 
 
 def send_message(token: str, channel_id: int, text: str) -> int:
+    text = public_text(text)
+    assert_public_text(text)
     result = call(token, "sendMessage", {
         "chat_id": channel_id,
         "text": text,
@@ -88,6 +95,8 @@ def send_message(token: str, channel_id: int, text: str) -> int:
 
 
 def edit_message(token: str, channel_id: int, message_id: int, text: str) -> None:
+    text = public_text(text)
+    assert_public_text(text)
     call(token, "editMessageText", {
         "chat_id": channel_id,
         "message_id": message_id,

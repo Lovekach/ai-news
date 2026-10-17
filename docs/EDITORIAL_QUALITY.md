@@ -43,7 +43,11 @@ for investigation and send the item to `needs_review`.
 An explicit verifier rejection requires a text revision. Later checks of smaller
 claim groups cannot override it. Measurement findings are reported together, so
 the existing bounded revision loop can repair all observed unit/condition errors.
-Writer, style-editor and revision responses are retained in the private audit.
+Writer, style-editor and revision responses remain in the private audit. A removed
+unfinished tail is recorded separately before style editing and checked again
+after it. The unchanged source and remaining complete prose still require the
+existing verifier. A tested variant without the style editor was rejected after
+it expanded unsupported explanations; no call-count optimization overrules quality.
 The verifier and correction editor use Ollama's native chat API with separate
 system instructions and JSON evidence in a user message. The same installed model and non-thinking mode
 are retained. An experimental thinking/structured-output combination returned JSON
@@ -80,7 +84,7 @@ An invalid merge receives at most two revisions within the existing deadline;
 only a revised, verified result can replace the latest approved fallback.
 Availability is not a new model release; a combined index score cannot be
 assigned to a named subtest. Expert counts retain their per-block scope.
-Full primary announcements take precedence over short X echoes in the link budget.
+Full primary announcements take precedence over short X echoes in private source references.
 
 A transient article connection/timeout failure gets one editorial retry before
 review. It never approves a story or bypasses factual checks. Repeated failures
@@ -118,7 +122,7 @@ establish that identity.
 
 The existing publication schedule stays at 21:00 Europe/Moscow, once per day.
 Telegram's application budget is **3900 UTF-16 code units**, even if a larger
-limit is configured. Primary links and complete qualifying sentences survive
+limit is configured. Source URLs are retained privately; complete qualifying sentences survive
 compaction. The full local edition includes coverage findings and date
 provenance. The transaction and uncertain-delivery ledger still prevent retries.
 Model releases, access expansions and developer tools receive an explicit priority
@@ -134,6 +138,55 @@ the model starts only for work and its process tree closes afterwards. This is a
 bounded evening window, not a new schedule or an all-day LLM loop.
 
 ## Verification and limits
+
+### Public Telegram projection
+
+URLs belong to private evidence and provenance, not the published edition.
+`presentation.public_text` removes URL destinations, shorteners, Markdown
+references and HTML anchors while retaining useful visible names. Domain-shaped
+product labels use a word joiner before the dot so their spelling stays visible
+without becoming a URL. A URL used as its own label is removed. Source headings
+and empty link paragraphs are removed too. This is a presentation operation;
+source articles, drafts, SQLite evidence and the full private archive are not
+sanitized in place.
+
+The exact public text is checked before reserving a publication, and the API
+boundary independently rejects remaining URLs, link entities and incomplete
+news. The archive's `telegram_text`, publication ledger and API payload must
+match. Private full-edition provenance comes from the same captured set of
+cards, even when later compaction holds a public card for review.
+
+### Completeness and chronology
+
+A valid structured response can still reach a string-length limit halfway
+through a fact. Before style editing and verification, remove only an unfinished
+final sentence from descriptive fields and record its original fragment in the
+private audit. An empty main story requires revision; an incomplete caveat is
+never silently discarded. Final checks reject dangling quantities, unbalanced
+delimiters and bare identifier headings. Compaction uses the same sentence
+boundaries, including abbreviated numeric units. These are conservative
+structural checks, not proof of linguistic or factual completeness.
+
+An explicit release date on a release-tag page can establish the event day;
+a feed's update date alone cannot. Historical release dates do not invalidate a
+genuinely current runtime integration. Integrations in different runtimes keep
+separate provider identities, with the headline's provider taking precedence
+over platforms mentioned only as background.
+
+### Real-model comparison protocol
+
+Use immutable saved inputs and a recorded baseline commit. Select development
+cases separately from an untouched control; write the control's source-based
+rubric before inspecting generated results. Keep model responses, input hashes,
+timings and isolated publication receipts privately. Count actual model calls,
+including retries, and compare the final API text, not only draft JSON.
+
+The October 12–16 replay did not establish an overall quality score or fewer
+model calls. Retaining the style editor was safer than a faster experimental
+path. Remaining verifier objections can contradict their own verdict, and a
+numeric-presence check cannot establish the meaning or direction of a metric.
+Do not convert a negative verdict to approval by matching positive words in
+its explanation. Held stories may still contain other unsupported claims.
 
 Run the Windows regression suite with:
 
