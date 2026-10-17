@@ -414,9 +414,9 @@ def measurement_issues(source: str, draft: str) -> list[str]:
     return issues
 
 
-def check_semantic_claims(source: str, draft: str) -> None:
+def check_semantic_claims(source: str, draft: str, *, check_measurements: bool = True) -> None:
     s, d = source.casefold(), draft.casefold()
-    issues = measurement_issues(source, draft)
+    issues = measurement_issues(source, draft) if check_measurements else []
     if issues:
         raise ValueError("; ".join(issues))
     if 'artificial analysis' in s and re.search(r"тест\w*.{0,35}искусственн\w*\s+анализ", d):

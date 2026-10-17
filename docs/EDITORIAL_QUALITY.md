@@ -1,6 +1,11 @@
 # Evidence and daily edition quality
 
-AI News uses its existing local writer, editor and fact verifier. Quality checks
+**Experimental branch, not approved for production.** Exact source quotes and
+passing unit tests do not prove that a sentence is entailed by its evidence.
+Real-model acceptance found remaining factual regressions; see
+[evaluation and release blockers](EVIDENCE_EVALUATION.md).
+
+AI News uses its existing local writer and fact verifier. Quality checks
 produce concrete findings and review decisions; they do not assign a numerical
 score or certify that every claim is true.
 
@@ -26,7 +31,7 @@ score or certify that every claim is true.
 
 ## Checks
 
-Generation preserves a product name in the headline, attribution, units,
+Generation requests a product name in the headline, attribution, units,
 comparison conditions and meaningful details. Numeric presence checks normalize
 decimal commas without rounding values. Semantic guards cover observed mistakes:
 independent products attributed to unaffiliated companies, quoted launches
@@ -40,10 +45,10 @@ limit gets one bounded retry with the same schema and prompt. Partial JSON is
 never accepted or repaired into facts. Failed checks retain the original article
 for investigation and send the item to `needs_review`.
 
-An explicit verifier rejection requires a text revision. Later checks of smaller
-claim groups cannot override it. Measurement findings are reported together, so
-the existing bounded revision loop can repair all observed unit/condition errors.
-Writer, style-editor and revision responses are retained in the private audit.
+Daily mode uses one writer request and one sentence-level verifier request on
+the successful path. The unconditional style-editor request is omitted. The
+legacy verification path remains for older drafts without a valid ledger.
+Writer, verifier and revision responses are retained in the private audit.
 The verifier and correction editor use Ollama's native chat API with separate
 system instructions and JSON evidence in a user message. The same installed model and non-thinking mode
 are retained. An experimental thinking/structured-output combination returned JSON
@@ -58,9 +63,58 @@ and cooling. A benchmark index leader cannot inherit another model's speed or co
 record. Source-backed translation repairs cover context/vocabulary units, the
 cited parallel throughput condition and an index score mislabeled as a subtest.
 Explicit author measurements retain attribution without inventing a developer role.
-Numbers and facts still require the unchanged checks, and original source text
-is never edited. Missing evidence remains a review decision, never a numerical
-quality score.
+Original source text is never edited. Missing evidence remains a review
+decision, never a numerical quality score.
+
+### Source-bound claim ledger
+
+The verifier returns a verdict for every stable sentence ID, including the
+headline. Each verdict carries a source index, up to three separate exact
+continuous evidence spans from that source,
+entity, version, event, explicit date, attribute, value, unit, conditions,
+provider, evidence basis and entity kind. These records use the existing private
+`editorial_audit`; there is no new database, model or service.
+
+Missing/duplicate IDs and spliced or invented quotations fail closed. Every
+evidence span is checked individually against the original; quoting separate
+facts does not permit inventing the relationship between them. Source
+typographic apostrophes/quotation marks and whitespace can be located through
+a narrow canonical match, but the ledger stores the original source substring.
+Changed words, identifiers, signs and numeric values are not repaired this way.
+URLs are assigned by the application. Names with numeric suffixes cannot change
+to another version merely because the replacement number occurs elsewhere.
+Literal source-validated entity numbers are distinct from measurement numbers.
+Explicit quantities normalize K/M/B/T scales and Russian abbreviations, while
+tokens, characters, parameters and time units retain their meanings.
+
+Invented metadata fields are cleared and recorded as metadata repairs; they
+cannot supply an event date, value or measurement condition. An actual invented
+number or changed unit in prose still fails its corresponding source check.
+Entity antecedents can be anchored elsewhere in the same original document.
+Source publication and detection dates never silently become release dates.
+
+Unsupported optional sentences are removed locally. The first main-event
+sentence must survive; a minor surviving detail cannot replace a rejected
+event. A rejected headline can use a verified literal entity as its safe title.
+Benchmark statements retain source attribution, added once when necessary.
+Failure of the main event still uses the existing bounded repair/review path.
+No later fragment check silently overturns a semantic verifier rejection.
+
+Unit/identity/arithmetic/comparator guards operate on the sentence's cited spans,
+not a bag of all numbers from the article. Coverage heuristics about unrelated
+omitted specifications cannot overrule a supported sentence. Throughput
+statements must retain their measured configuration and scope. These literal
+checks complement semantic verification; they do not prove entailment by
+themselves.
+
+An explicit source relation such as `scores N on Metric` binds a score to that
+named metric. A subtest cannot inherit the overall index score, and a single
+test result cannot become one result for a list of different tests. Where an
+otherwise verified score omits its metric without asserting another test, the
+literal source metric can supply its scope; the original text is retained in
+the audit. Ambiguous equal scores across different metrics are left to semantic
+verification, rather than resolved by numeric coincidence. Unstructured tables
+and other grammatical forms are not completely covered by this narrow parser.
 
 Event grouping identifies the main product, its explicit version, brand namespace,
 event type and distinct hosting provider. Generic versioned product names are
@@ -68,16 +122,21 @@ supported; a competitor in a comparison does not become the subject. Original
 announcement titles establish availability events even if Russian headlines differ.
 App, developer API and global notices of the same rollout can form one story;
 model releases, patches, benchmarks and distinct provider launches remain separate.
+The original subject title can expand a compatible abbreviated product name;
+it cannot replace an unrelated entity. A company name alone is insufficient
+to merge multiple product launches from that company.
 Merged text is checked against original source excerpts, not earlier paraphrases.
-For availability notices, intact approved sentences are combined first and
+For stories with valid claim ledgers, intact approved sentences are combined and
 verified against every original and the newest state. No new prose is invented
 in this path; contradictions must pass the same verifier before caching.
-The verifier receives separate dated original documents when they fit the
-existing evidence budget; a short new notice does not cancel earlier details
+The verifier receives separate dated original documents in a bounded excerpt
+budget; exact quotes are validated against their separate complete originals.
+A short new notice does not cancel earlier details
 without a contradiction. Relative "today" wording and leaked editorial
 instructions are removed from generated prose, preserving date metadata.
-An invalid merge receives at most two revisions within the existing deadline;
-only a revised, verified result can replace the latest approved fallback.
+An invalid structured merge retains the latest individually approved story;
+it does not start a second merge writer/revision cascade. Legacy merges retain
+their existing bounded revision behavior.
 Availability is not a new model release; a combined index score cannot be
 assigned to a named subtest. Expert counts retain their per-block scope.
 Full primary announcements take precedence over short X echoes in the link budget.
@@ -113,6 +172,14 @@ hardware conditions, or omits the card when those details cannot fit. An exact
 single article link can join a short notice to its official announcement when
 neither has a conflicting product/event signature. Multi-link roundups do not
 establish that identity.
+
+For ledger-backed stories, the final formatter may omit whole approved
+sentences, but cannot edit their contents or detach a measurement condition
+inside one sentence. Russian numeric abbreviations such as `тыс.` retain the
+following unit. A source hash prevents reuse of stale ledgers, and merged
+ledgers are bound to the complete group fingerprint. Concrete semantic
+contradictions still fail final checks. Historical drafts without ledgers keep
+the legacy final quality gate.
 
 ## Edition and resources
 

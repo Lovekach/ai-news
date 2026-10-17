@@ -1,5 +1,9 @@
 # Architecture
 
+The sentence-verdict changes described on this branch are experimental and
+have not passed editorial acceptance. See [evaluation](docs/EVIDENCE_EVALUATION.md)
+before considering deployment.
+
 AI News is a local Windows application with separately scheduled collection, editing and publication. There is no resident Python scheduling loop.
 
 ## Modules
@@ -13,6 +17,7 @@ AI News is a local Windows application with separately scheduled collection, edi
 | `store` | SQLite items, polling state, drafts, edition ledger and corrections |
 | `pipeline` | Source polling, editorial prompts, evidence and model verification |
 | `quality` | Semantic guards, event signatures and repetition checks |
+| `evidence` | Source-bound sentence verdicts, literal identities/units, claim ledger and final sentence integrity |
 | `digest` | Draft parsing, sentence-aware card compaction and legacy interval helpers |
 | `daily` | Moscow day selection, grouping, verified merge cache, priority and output allocation |
 | `model_session` | Independent localhost Ollama server and owned-process cleanup |
@@ -34,14 +39,15 @@ Keep the ledger when moving an installation. A second copy with a fresh database
 
 1. Collect bounded feed/page data with timeouts, cache validators and source backoff. No LLM calls.
 2. Filter stale articles, promotion, unsupported reposts, speculation and prereleases during evening editing.
-3. Generate structured Russian drafts with evidence. Check numbers, access conditions and known semantic errors. A second model request verifies the text against that evidence.
-4. Group current-day approved records by event signatures and similarity. Merges use the same checking pipeline; failure retains the latest approved draft.
+3. Generate a Russian draft, then request one source-bound verifier verdict for each sentence. Daily mode skips the unconditional style rewrite. Exact quotes, identities, units and measurement relations pass deterministic guards; optional unsupported sentences can be removed without a new model request. A rejected main event requires bounded revision or review.
+4. Group current-day approved records using structured entity/version/event/date/provider metadata, with legacy signatures for drafts without a valid ledger. Combine intact verified sentences and verify against separate originals; failure retains the latest approved draft.
 5. Archive the longer edition, and allocate Telegram's budget by importance. Concrete details and caveats take precedence over explanatory filler. Preserve complete sentences.
 6. Reserve a daily slot and send one Telegram message.
 
 Coverage depends on source access. Checks do not independently verify every source assertion. Grouping may miss unusual wording or conflate ambiguous event descriptions.
 
-`editorial_audit` retains decisions, verification results and revision reasons.
+`editorial_audit` retains decisions, verification results, source-bound claim
+ledgers and revision reasons. No second database or migration is required.
 `source_dates` separates publication/update/event dates; discovery stays in
 `items.created_at`. Unknown dates are retained as null. Deterministic guards run
 again on approved, merged and shortened cards. See
