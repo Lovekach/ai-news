@@ -11,6 +11,7 @@ from typing import Any
 from .pipeline import canonical_title, duplicate_story, duplicate_title, recent_enough
 from .store import Store
 from .quality import freshness_hours, same_event
+from .evidence import sentences
 
 AD_TITLE = re.compile(r"\b(?:sponsored|advertisement|promo\s*code|subscribe|реклам\w*|промокод\w*|скидк\w*|подпишитесь)\b", re.I)
 NEWS_SEPARATOR = "\n\n\n\n"
@@ -80,7 +81,7 @@ def parse_draft(text: str) -> dict[str, str]:
 
 
 def _sentences(value: str) -> list[str]:
-    return [part.strip() for part in re.split(r"(?<=[.!?])\s+", value.strip()) if part.strip()]
+    return sentences(value)
 
 
 def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: bool = False) -> str:

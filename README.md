@@ -8,11 +8,15 @@ It is designed for a personal Windows laptop: collection does not call the LLM, 
 
 ## Features
 
+This branch contains an **unapproved editorial experiment**. Its unit tests pass,
+but real-model acceptance found factual errors and missed event merges. It is
+not approved for production; see [the evaluation](docs/EVIDENCE_EVALUATION.md).
+
 - RSS, Atom and sitemap ingestion with conditional requests, source-specific intervals and failure backoff.
 - Public Telegram parsing without a user session; incremental IDs, edited-post invalidation and visible deleted-post handling.
 - X account ingestion through public RSS mirrors. Mirrors are unreliable; official feeds can offer alternative coverage.
 - SQLite queues, source cursors, drafts and publication receipts.
-- Structured local LLM generation, evidence checks, numeric and semantic guards, and a second LLM verification pass. Uncertain claims go to `needs_review`.
+- Local writer and sentence-level verifier with exact source quotes, identity/unit guards and a private evidence ledger. Unsupported optional sentences are removed; an unsupported main event requires revision or `needs_review`.
 - Daily grouping of related events and selection of the latest verified state. A failed merge falls back to an individually approved draft.
 - One Telegram message with sentence-aware compaction and source caveats preserved. A longer edition is archived locally.
 - Transactional edition reservation and blocked automatic retries after ambiguous delivery.

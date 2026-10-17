@@ -16,6 +16,7 @@ from .pipeline import (SCHEMA, align_evidence, draft_text, duplicate_story, dupl
 from .quality import event_signature, draft_issues, source_window
 from .store import Store
 from .security import safe_error
+from . import evidence as claim_evidence
 
 # Moscow has UTC+3 throughout the year. Explicit offset also works on Windows
 # installations without an IANA tzdata package; never use the laptop's timezone.
@@ -103,17 +104,21 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
         except ValueError:
             discarded.append((row["url"], "Invalid approved draft"))
             continue
-        issues = draft_issues(row["article"] or row["summary"], row["draft"], headline=fields["headline"])
+        ledger = claim_evidence.load_ledger(store, row)
+        issues = (claim_evidence.final_issues(row['article'] or row['summary'], row['draft'], ledger) if ledger
+                  else draft_issues(row["article"] or row["summary"], row["draft"], headline=fields["headline"]))
         if issues:
             discarded.append((row["url"], "Quality review required: " + "; ".join(issues)))
             continue
         if canonical_title(fields["what"]) in sent_facts:
             discarded.append((row["url"], "Already published facts; no new development"))
             continue
-        signature = event_signature(row["title"], row["summary"]) or event_signature(fields["headline"], fields["what"])
+        signature = claim_evidence.event_key(ledger, row['title']) or event_signature(row["title"], row["summary"]) or event_signature(fields["headline"], fields["what"])
         for group in result:
             latest = parse_draft(group[0]["draft"])
-            other_signature = event_signature(group[0]["title"], group[0]["summary"]) or event_signature(latest["headline"], latest["what"])
+            other_signature = (claim_evidence.event_key(claim_evidence.load_ledger(store, group[0]), group[0]['title'])
+                               or event_signature(group[0]["title"], group[0]["summary"])
+                               or event_signature(latest["headline"], latest["what"]))
             # Never collapse different explicit model versions or event types.
             if ((signature is not None and signature == other_signature) or
                 (signature is None and other_signature is None
@@ -124,7 +129,13 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
                 break
         else:
             result.append([row])
-    result.sort(key=lambda group: priority(group[0]), reverse=True)
+    def order(group):
+        key = claim_evidence.event_key(claim_evidence.load_ledger(store, group[0]), group[0]['title'])
+        event = key[2] if key else (event_signature(group[0]['title'], group[0]['summary']) or ('', '', 'other', ''))[2]
+        tier = {'release': 80, 'announcement': 80, 'support': 70, 'availability': 70,
+                'update': 60, 'benchmark': 50, 'other': 30, 'opinion': 10}.get(event, 30)
+        return tier, priority(group[0])
+    result.sort(key=order, reverse=True)
     return result, discarded
 
 
@@ -147,7 +158,7 @@ def linked_announcement(left, right) -> bool:
 
 
 def fingerprint(group: list) -> str:
-    content = ["quality-v4", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
+    content = ["quality-v5", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -189,8 +200,13 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
                                             "url": row['url'], "text": source_window(row['article'] or row['summary'],
                                             3000 if index == 0 else older_budget)} for index, row in enumerate(group)],
                     "_audit": lambda stage, details: store.record_editorial(latest['url'], "merge_" + stage, details)}
+        structured = all(claim_evidence.load_ledger(store, row) for row in group)
+        if structured:
+            settings['_structured_review'] = True
+            settings['_source_documents'] = [{'url': row['url'], 'published': row['published'],
+                                               'text': row['article'] or row['summary']} for row in group]
         signature = event_signature(latest['title'], latest['summary'])
-        if signature and signature[2] == 'availability':
+        if structured or signature and signature[2] == 'availability':
             # Complementary rollout notices often need no new prose. Keep
             # approved sentences intact, then verify the combined conditions
             # against ALL originals and the newest state before caching.
@@ -202,14 +218,18 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
                                       ('why_it_matters', 'why'), ('caveat', 'caveat')):
                 sentences = []
                 for field in fields:
-                    for sentence in re.split(r'(?<=[.!?])\s+', field.get(key_field, '')):
+                    for sentence in claim_evidence.sentences(field.get(key_field, '')):
                         if sentence and not duplicate_title(sentence, seen):
                             sentences.append(sentence)
                             seen.append(sentence)
                 copy[target] = ' '.join(sentences)
             try:
-                text = draft_text(copy, evidence, source_title=latest['title'])
-                verify_draft(settings, latest['title'], evidence, text, evidence=copy['evidence'])
+                text = draft_text(copy, evidence, source_title=latest['title'], check_claims=not structured)
+                review = verify_draft(settings, latest['title'], evidence, text, evidence=copy['evidence'])
+                if isinstance(review, dict) and 'claims' in review:
+                    text = review['text']
+                    review['fingerprint'] = key
+                    store.record_editorial(latest['url'], 'merge_claim_ledger', review)
                 store.record_editorial(latest['url'], 'merge_copy', {'fingerprint': key, 'draft': copy})
                 with store.db:
                     store.db.execute('INSERT OR REPLACE INTO daily_story_drafts VALUES (?,?)', (key, text))
@@ -217,6 +237,9 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
                 continue
             except Exception as exc:
                 store.record_editorial(latest['url'], 'merge_copy_failed', {'reason': safe_error(exc)})
+                if structured:
+                    report.append('Merge held; latest individually verified version retained')
+                    continue
                 # No verification bypass: fall through to the existing editor.
         try:
             draft = ollama_json(config, prompt, SCHEMA)
@@ -346,6 +369,19 @@ def allocate_cards(cards: list, limit: int) -> list[tuple[str, list]]:
     return [(item["text"], item["group"]) for item in selected]
 
 
+def group_issues(store: Store, group: list, text: str, *, merged: bool = False) -> list[str]:
+    ledger = claim_evidence.load_ledger(store, group[0]) if not merged else None
+    if merged:
+        for saved in store.db.execute("SELECT details FROM editorial_audit WHERE url=? AND stage='merge_claim_ledger' ORDER BY id DESC",
+                                      (group[0]['url'],)):
+            candidate = json.loads(saved[0])
+            if candidate.get('fingerprint') == fingerprint(group):
+                ledger = candidate
+                break
+    original = '\n'.join(row['article'] or row['summary'] for row in group)
+    return claim_evidence.final_issues(original, text, ledger) if ledger else draft_issues(original, text)
+
+
 def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
     story_groups, discarded = groups(config, store, now)
     cards = []
@@ -354,7 +390,7 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
                                   (fingerprint(group),)).fetchone()
         fields = parse_draft(cached[0] if cached else group[0]["draft"])
         original = "\n".join(r["article"] or r["summary"] for r in group)
-        issues = draft_issues(original, card(fields, detail_first=True), headline=fields["headline"])
+        issues = group_issues(store, group, card(fields, detail_first=True), merged=bool(cached))
         if issues:
             discarded.extend((r["url"], "Quality review required: " + "; ".join(issues)) for r in group)
             continue
@@ -365,7 +401,8 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
     chosen = allocate_cards(cards, limit)
     checked = []
     for text, group in chosen:
-        issues = draft_issues("\n".join(r["article"] or r["summary"] for r in group), text)
+        cached = store.db.execute('SELECT 1 FROM daily_story_drafts WHERE fingerprint=?', (fingerprint(group),)).fetchone()
+        issues = group_issues(store, group, text, merged=bool(cached))
         if issues:
             discarded.extend((r["url"], "Quality review required after shortening: " + "; ".join(issues)) for r in group)
         else:
