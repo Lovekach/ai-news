@@ -15,7 +15,7 @@ from urllib.parse import unquote, urlparse
 from .feeds import Entry, article_details, article_text, download, download_feed, parse_feed
 from .store import Store
 from .security import safe_error
-from .quality import (check_semantic_claims, derived_numbers, freshness_hours, repeated_sentences,
+from .quality import (check_semantic_claims, derived_numbers, freshness_hours, repeated_sentences, trim_incomplete_tail,
                       source_window, editorial_context, draft_issues, dated_recap, explicit_event_date)
 
 SCHEMA: dict[str, Any] = {
@@ -582,6 +582,11 @@ def draft_text(draft: dict[str, Any], source_text: str, *, source_title: str = "
     fields = ["headline", "what_happened", "simple_explanation", "why_it_matters", "caveat"]
     values = {field: " ".join(str(draft.get(field, "")).split()) for field in fields}
     values = {field: normalize_literal_translations(value, source_text) for field, value in values.items()}
+    # JSON-schema maxLength can end a valid string in the middle of a fact.
+    # Drop only the unfinished final sentence, before verification. Never
+    # invent its missing number/condition, or silently drop a caveat.
+    for field in ('what_happened', 'simple_explanation', 'why_it_matters'):
+        values[field] = trim_incomplete_tail(values[field])[0]
     # Drop a model-as-agent headline descriptor only when the source explicitly
     # assigns reasoning-only mode to that exact product. Keep its name/version.
     products = re.findall(r"\b([A-Za-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)+)\s+is\s+(?:a\s+)?reasoning-only", source_text, re.I)
@@ -837,10 +842,15 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                 article = re.split(r"(?i)\bFull Changelog\s*:", article, maxsplit=1)[0].strip()
             store.record_source_dates(url, original_published=original_date,
                                       event_date=verified_release_date or explicit_event_date(article))
+            release_date = explicit_event_date(article) if '/releases/tag/' in url else None
+            if release_date and config.get('publication_mode') == 'daily' and original_is_other_moscow_day(release_date, row['published']):
+                store.set_state(url, 'skipped', article=article, error='Explicit release date predates the digest day')
+                report.append(f'SKIP old release: {title}')
+                continue
             if config.get("publication_mode") == "daily" and dated_recap(row["summary"]):
                 raise ValueError("Retrospective announcement needs event-date verification, not today's discovery date")
             dates = store.db.execute("SELECT * FROM source_dates WHERE url=?", (url,)).fetchone()
-            if dates and dates["date_kind"] == "updated" and not original_date:
+            if dates and dates["date_kind"] == "updated" and not original_date and not release_date:
                 raise ValueError("Update timestamp is not evidence of original publication date")
             settings = {**config, "_source_url": evidence_url or url,
                         "_source_author": source.get("handle"), "_source_published": row["published"],
@@ -869,12 +879,23 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                                 error="Not selected by editor: no relevant news event")
                 report.append(f"SKIP irrelevant: {title}")
                 continue
-            draft = polish_draft(settings, title, article, draft)
-            store.record_editorial(url, "style_editor", draft)
+            unfinished = {field: trim_incomplete_tail(str(draft[field])) for field in
+                          ('what_happened', 'simple_explanation', 'why_it_matters') if field in draft}
+            removed = {field: tail for field, (body, tail) in unfinished.items() if tail}
+            if removed:
+                store.record_editorial(url, 'incomplete_tail_removed', {'fields': removed})
+                draft = {**draft, **{field: body for field, (body, tail) in unfinished.items() if tail}}
+            if draft.get('what_happened'):
+                draft = polish_draft(settings, title, article, draft)
+                store.record_editorial(url, "style_editor", draft)
             for attempt in range(3):
                 try:
                     draft = align_evidence(draft, f"{title} {article}")
                     text = draft_text(draft, f"{title} {article}", source_title=title)
+                    removed = {field: tail for field in ('what_happened', 'simple_explanation', 'why_it_matters')
+                               if (tail := trim_incomplete_tail(str(draft.get(field, '')))[1])}
+                    if removed:
+                        store.record_editorial(url, 'incomplete_tail_removed', {'fields': removed})
                     verify_draft(settings, title, article, text, evidence=str(draft.get("evidence", "")))
                 except ValueError as exc:
                     if attempt < 2 and draft.get("relevant") is True:

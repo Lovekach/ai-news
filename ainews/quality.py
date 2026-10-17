@@ -3,6 +3,56 @@ import re
 from datetime import datetime
 
 
+def sentences(text: str) -> list[str]:
+    """Sentence boundaries shared with compaction; keep numeric units attached."""
+    return [part.strip() for part in re.split(
+        r'(?<!тыс\.)(?<!млн\.)(?<!млрд\.)(?<!трлн\.)(?<=[.!?])\s+', text.strip(), flags=re.I)
+            if part.strip()]
+
+
+def complete_sentence(text: str) -> bool:
+    value = text.strip()
+    if not re.search(r'[.!?][»”"\')\]]*$', value) or value.endswith(('...', '…')):
+        return False
+    if re.search(r'\b(?:тыс|млн|млрд|трлн)\.$', value, re.I):
+        return False
+    if re.search(r'[~≈$=:/−—-]\s*[.!?]|\d[.,]\s*[.!?]', value):
+        return False
+    return (value.count('(') == value.count(')') and value.count('[') == value.count(']')
+            and value.count('«') == value.count('»') and value.count('“') == value.count('”')
+            and value.count('"') % 2 == 0)
+
+
+def trim_incomplete_tail(text: str) -> tuple[str, str]:
+    if complete_sentence(text):
+        return text, ''  # Quoted text can span several sentences.
+    parts = sentences(text)
+    if parts and not complete_sentence(parts[-1]):
+        return ' '.join(parts[:-1]), parts[-1]
+    return text, ''
+
+
+def headline_issues(headline: str) -> list[str]:
+    if len(re.findall(r'[^\W_][\w.-]*', headline)) < 2 or not complete_sentence(headline+'.'):
+        return ['Headline lacks an informative event description']
+    return []
+
+
+def integrity_issues(text: str, *, headline: str | None = None) -> list[str]:
+    parts = text.split('\n\n')
+    if parts and parts[0].startswith(('🧠 ', '- ')):
+        first = parts.pop(0)
+        headline = headline or first[2:].strip()
+    issues = headline_issues(headline) if headline is not None else []
+    for part in parts:
+        if not part.strip() or part.lstrip().startswith(('https://', 'http://')):
+            continue  # Private source suffix; the public transport forbids it.
+        body = re.sub(r'^(?:Что произошло|Простыми словами|Зачем это нужно|Что важно знать):\s*', '', part.strip())
+        if not complete_sentence(body):
+            issues.append('Incomplete sentence, unbalanced delimiter or truncated characteristic')
+    return list(dict.fromkeys(issues))
+
+
 def freshness_hours(config: dict, source: dict) -> int:
     if config.get("publication_mode") == "daily":
         return 24
@@ -64,15 +114,18 @@ def event_signature(headline: str, body: str) -> tuple[str, str, str, str] | Non
         focus = "update"
     elif re.search(r"new model|model release|новая модель|новый релиз", title):
         focus = "announcement"
+    elif re.search(r'\bsupport(?:ed)?\b|\bintegration\b|поддержк|интеграц', title):
+        focus = 'support'
     elif re.search(r"доступ|платформ|api|вес\w*\s+откры|available|comes to|"
                    r"(?:добавлен\w*|откр\w*).{0,60}(?:прилож|разработчик)|в\s+приложение", title):
         focus = "availability"
     else:
         focus = "announcement"
     provider = ""
-    if focus == "availability":
-        provider = next((name for name in ("nebius", "arena", "bedrock", "ollama", "hugging face")
-                         if name in text), "")
+    if focus in {"availability", "support"}:
+        platforms = ("nebius", "arena", "bedrock", "ollama", "vllm", "sglang", "hugging face")
+        provider = (next((name for name in platforms if name in title), "")
+                    or next((name for name in platforms if name in text), ""))
     # Product patch releases are different events; don't mix consecutive days'
     # versions just because the agent name is the same.
     if entity.startswith("hermes"):
@@ -158,7 +211,7 @@ def explicit_event_date(source: str) -> str | None:
 
 def draft_issues(source: str, draft: str, *, headline: str = "") -> list[str]:
     """Actionable deterministic findings, deliberately without a quality score."""
-    issues = []
+    issues = integrity_issues(draft, headline=headline or None)
     try:
         check_semantic_claims(source, draft)
     except ValueError as exc:
@@ -416,6 +469,13 @@ def measurement_issues(source: str, draft: str) -> list[str]:
 
 def check_semantic_claims(source: str, draft: str) -> None:
     s, d = source.casefold(), draft.casefold()
+    if (re.search(r'\bстандарт(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b', d)
+            and not re.search(r'standard|protocol|specification|\brfc\d*\b|\bieee\b|\biso\b|стандарт|протокол|спецификац', s)):
+        raise ValueError('Source does not establish a standard; retain the product name without inventing its category')
+    if (re.search(r'без\s+потер\w*\s+(?:качеств|точност)', d)
+            and not re.search(r'lossless|(?:no|without)\s+(?:any\s+)?(?:loss|losing)\s+(?:(?:of|in)\s+)?(?:quality|accuracy)|'
+                              r'no\s+(?:quality|accuracy)\s+loss|same\s+(?:quality|accuracy)|без\s+потер\w*\s+(?:качеств|точност)', s)):
+        raise ValueError('Source does not establish a no-loss quality or accuracy guarantee')
     issues = measurement_issues(source, draft)
     if issues:
         raise ValueError("; ".join(issues))
