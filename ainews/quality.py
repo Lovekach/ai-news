@@ -148,17 +148,33 @@ def source_window(text: str, limit: int = 7000) -> str:
     tail_size = min(1000, limit // 4)
     head = text[:max(1, limit - tail_size - 1600)]
     tail = text[-tail_size:]
-    parts = [head]
-    risky = re.compile(r"not affiliated|isn't affiliated|founder|developed by|built by|"
-                       r"release date|published|only|unchanged|forks|mirrors|\d+(?:\.\d+)?%", re.I)
+    essential = re.compile(r"not affiliated|isn't affiliated|founder|developed by|built by|"
+                           r"release date|published|only|unchanged|forks|mirrors", re.I)
+    quantified = re.compile(r"\d+(?:\.\d+)?%|(?:\d[\d,.]*\s*[kmb]?|one|two|three|four|five|six|seven|eight|nine|ten)"
+                           r"\s+(?:pull requests?|PRs?|lines?|engineers?|developers?|weeks?|days?|tokens?|parameters?)\b", re.I)
     budget = limit - len(head) - len(tail) - 120
-    for match in risky.finditer(text, len(head), len(text) - len(tail)):
-        excerpt = text[max(len(head), match.start() - 100):min(len(text), match.end() + 220)]
-        if len(excerpt) <= budget and excerpt not in " ".join(parts):
-            parts.append(excerpt)
-            budget -= len(excerpt) + 24
-    parts.append(tail)
-    return "\n[Пропуск текста]\n".join(parts)[:limit]
+    chosen = [(0, len(head)), (len(text)-len(tail), len(text))]
+    # Keep ownership/date restrictions first. Merge overlapping excerpts so
+    # a count, its unit and time interval do not consume the budget repeatedly.
+    for pattern in (essential, quantified):
+        ranges = []
+        for match in pattern.finditer(text, len(head), len(text)-len(tail)):
+            start, end = max(len(head), match.start()-100), min(len(text)-len(tail), match.end()+220)
+            if ranges and start <= ranges[-1][1] and end-ranges[-1][0] <= min(900, max(1, budget)):
+                ranges[-1] = (ranges[-1][0], max(end, ranges[-1][1]))
+            else:
+                ranges.append((start, end))
+        for start, end in ranges:
+            if end-start <= budget:
+                chosen.append((start, end))
+                budget -= end-start+24
+    merged = []
+    for start, end in sorted(chosen):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return '\n[Пропуск текста]\n'.join(text[start:end] for start, end in merged)[:limit]
 
 
 def editorial_context(config: dict) -> str:
@@ -168,6 +184,8 @@ def editorial_context(config: dict) -> str:
             f"\nДата публикации сообщения: {config.get('_source_published', 'не установлена')}"
             f"\nДата публикации материала: {config.get('_original_published') or 'не установлена'}"
             f"\nКалендарная дата выпуска (МСК): {config.get('_edition_date') or 'не указана'}")
+    if config.get('_signal_title_unverified'):
+        provenance += '\nЗаголовок вторичного поста не является доказательством. Все факты и числа подтверждай только первичным текстом.'
     return (provenance +
             "\nДата обнаружения не доказывает дату события. Не называй старый продукт новым релизом "
             "по сегодняшнему репосту. Если дата события неизвестна, не выдумывай её. "
@@ -249,7 +267,49 @@ def relational_issues(source: str, draft: str) -> list[str]:
     """
     s, d = source.casefold(), draft.casefold()
     issues = []
+    owners = re.finditer(r"\b([A-Z][\w-]+)[’']s\s+(?:(?:first|new|open|language|multimodal|AI)\s+)*model\s+([A-Z][\w.-]+)", source)
+    verbs = r'(?:анонсировал\w*|выпустил\w*|представил\w*|разработал\w*)'
+    for owner_match in owners:
+        if re.search(r'[A-Z][\w-]+\s+$',source[:owner_match.start()]):
+            continue  # Multiword company/alias: do not guess a single-token owner.
+        owner,product=owner_match.groups()
+        assignments = re.findall(r'\b([A-Z][\w-]+)\s+'+verbs+r'\s+(?:модель\s+)?[^.!?\n]{0,45}\b'+re.escape(product)+r'\b',draft)
+        for match in re.finditer(r'\b(?:компания|команда|она|они)\s+'+verbs+r'\s+(?:модель\s+)?[^.!?\n]{0,45}\b'+re.escape(product)+r'\b',draft,re.I):
+            start = max(0, draft.rfind('\n\n',0,match.start()))
+            antecedents=set(re.findall(r'(?i:компания|команда|лаборатория)\s+([A-Z][\w-]+)',draft[start:match.start()]))
+            if len(antecedents)==1:
+                assignments.extend(antecedents)
+        if any(company.casefold()!=owner.casefold() for company in assignments):
+            issues.append(f'Product ownership differs from the explicit source: {product} belongs to {owner}; correct the developer attribution, including company pronouns')
+    for match in re.finditer(r'\bnear\s+([A-Z][\w.-]*(?:\s+[A-Z0-9][\w.-]*){0,3})',source):
+        target=match[1].casefold().rstrip('.')
+        if re.search(r'(?:above|ahead of|better than)\s+'+re.escape(target),s):
+            continue
+        for sentence in sentences(draft):
+            if target not in sentence.casefold():
+                continue
+            prefix=sentence.casefold().split(target)[0]
+            cues=list(re.finditer(r'выше|опереж\w*|превосход\w*|лучше|ниже|сопостав\w*|на уровне',prefix))
+            if cues and re.fullmatch(r'выше|опереж\w*|превосход\w*|лучше',cues[-1][0]):
+                issues.append('Comparable performance was promoted to superiority: near '+match[1]+' означает сопоставимый уровень, не превосходство')
+    if (re.search(r'#\s*1\s+(?:[\w-]+\s+){0,4}open(?:[- ]source)?\s+model',s)
+            and not re.search(r'first(?:[- ]ever)?\s+(?:[\w-]+\s+){0,3}open(?:[- ]source)?\s+model',s)
+            and re.search(r'перв(?:ая|ой|ый|ым|ое)\s+открыт\w*\s+модел',d)):
+        issues.append('Rank #1 is first place, not the first-ever open model: пиши «заняла первое место среди», сохрани класс сравнения')
+    if (re.search(r'dataset|датасет',s) and re.search(r'в качестве\s+(?:модели[- ]?)?учител',d)
+            and not re.search(r'\bteacher\b|учител|distill(?:ed|ing|ation)?\s+from',s)):
+        issues.append('Dataset name does not establish the teacher model: источник называет датасет, но не модель-учителя; сохрани эту роль точно')
+    if (re.search(r'reinforcement learning|\brl\b',s) and not re.search(r'rlhf|human feedback|feedback from (?:users|humans)|обратн\w* связ\w*.{0,20}(?:человек|пользовател)',s)
+            and re.search(r'обратн\w* связ\w*\s+от\s+пользовател',d)):
+        issues.append('Reinforcement learning is not necessarily human feedback; retain обучение с подкреплением rather than feedback from users')
     number = r"\d+(?:[.,]\d+)?"
+    if re.search(r'(?:points?|pts?)\s+(?:over|above|below)\s+(?:the\s+)?(?:leaderboard\s+)?average', s):
+        margins = set(re.findall('(' + number + r')\s+(?:points?|pts?)\s+(?:behind|below|ahead|above)', s))
+        for margin in re.findall(r'(?:отста\w*|уступ\w*)\s+на\s+(' + number + ')', d):
+            if margin.replace(',', '.') not in margins | derived_numbers(source, draft):
+                issues.append('Scores relative to average are not gaps behind the leaders; retain the original reference baseline. '
+                              'Замени «отстают на» на показатель относительно среднего, сохрани знак и диапазон из источника. '
+                              'Не вычисляй отрыв от лидера: источник сообщает значения относительно среднего.')
     def value(text):
         return float(text.replace(',', '.'))
     for a, b, result in re.findall('(' + number + r')\s*[−–-]\s*(' + number +
@@ -316,7 +376,7 @@ def relational_issues(source: str, draft: str) -> list[str]:
             configuration = r'\b(?:' + count + '|' + words.get(count, count) + r')\b[^.!?\n]{0,55}\b' + hardware + r'\b'
             if not re.search(configuration, d):
                 issues.append('Throughput claim omits the measured GPU count or hardware')
-        if 'per user' in s and not re.search(r'на\s+(?:одного\s+)?пользовател|для\s+одного\s+пользовател', d):
+        if 'per user' in s and not re.search(r'(?:на|для)\s+(?:одного\s+)?пользовател', d):
             issues.append('Per-user throughput lost its per-user scope')
         formats = set(re.findall(r'\b(?:nvfp\d+|bf16|fp16|fp8|int8)\b', s))
         if len(formats) == 1 and next(iter(formats)) not in d:
@@ -376,8 +436,9 @@ def derived_numbers(source: str, draft: str) -> set[str]:
 def measurement_issues(source: str, draft: str) -> list[str]:
     """Report all measurement objections together for a bounded revision."""
     s, d = source.casefold(), draft.casefold()
-    issues = relational_issues(source, draft)
-    if re.search(r"open[- ]weights?\b", s) and not re.search(r"source code|open[- ]source", s):
+    from .measurements import measurement_issues as bound_measurements
+    issues = relational_issues(source, draft) + bound_measurements(source, draft)
+    if re.search(r"open[- ]weights?\b", s) and not re.search(r"source code|code and (?:model )?weights|models? (?:are )?fully open", s):
         if re.search(r"(?:откр\w*.{0,55}(?:исходн\w*\s+код|код)|исходн\w*\s+код.{0,40}откр)|"
                      r"установ\w*.{0,20}из\s+исходн\w*\s+код", d):
             issues.append("Open weights do not establish release of source code")
@@ -443,7 +504,7 @@ def measurement_issues(source: str, draft: str) -> list[str]:
             issues.append("Brief hardware story omits air cooling")
     # The source can explicitly name different winners for cost and latency.
     # Do not transfer those extrema to the overall index leader in a headline.
-    title = d.splitlines()[0]
+    title = d.splitlines()[0] if d.splitlines() else ''
     subject = _VERSIONED_PRODUCT.search(title)
     winners = re.findall(r"([a-z][\w-]*(?:\s+v?\d+(?:\.\d+)*(?:\s+\d+b)?)?(?:\s+decision)?)\s+"
                          r"(?:has|is) the (lowest|fastest)", s)
@@ -469,12 +530,17 @@ def measurement_issues(source: str, draft: str) -> list[str]:
 
 def check_semantic_claims(source: str, draft: str) -> None:
     s, d = source.casefold(), draft.casefold()
+    if re.search(r'исходн\w*\s+код\w*\s+вес\w*', d):
+        raise ValueError('Model weights are parameters, not source code; keep weights and software code distinct')
+    if (re.search(r'независим\w*\s+(?:тест|замер|измерен|оценк)', d)
+            and not re.search(r'independent|независим', s)):
+        raise ValueError('Source does not establish an independent measurement')
     if (re.search(r'\bстандарт(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b', d)
             and not re.search(r'standard|protocol|specification|\brfc\d*\b|\bieee\b|\biso\b|стандарт|протокол|спецификац', s)):
         raise ValueError('Source does not establish a standard; retain the product name without inventing its category')
-    if (re.search(r'без\s+потер\w*\s+(?:качеств|точност)', d)
+    if (re.search(r'без\s+потер\w*\s+(?:качеств|точност|смысл)', d)
             and not re.search(r'lossless|(?:no|without)\s+(?:any\s+)?(?:loss|losing)\s+(?:(?:of|in)\s+)?(?:quality|accuracy)|'
-                              r'no\s+(?:quality|accuracy)\s+loss|same\s+(?:quality|accuracy)|без\s+потер\w*\s+(?:качеств|точност)', s)):
+                              r'no\s+(?:quality|accuracy)\s+loss|same\s+(?:quality|accuracy)|without losing (?:meaning|semantics)|без\s+потер\w*\s+(?:качеств|точност|смысл)', s)):
         raise ValueError('Source does not establish a no-loss quality or accuracy guarantee')
     issues = measurement_issues(source, draft)
     if issues:

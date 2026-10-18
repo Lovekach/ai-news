@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 
 from .digest import AD_TITLE, NEWS_SEPARATOR, card, parse_draft, published_in_window
 from .pipeline import (SCHEMA, align_evidence, draft_text, duplicate_story, duplicate_title,
-                       canonical_title, ollama_json, prepare, revise_draft, telegram_evidence_url, verify_draft)
+                       canonical_title, ollama_json, prepare, revise_draft, telegram_evidence_url, verify_draft,
+                       VerificationProtocolError)
 from .quality import event_signature, draft_issues, source_window, integrity_issues
 from .presentation import public_text, assert_public_text
 from .store import Store
@@ -148,7 +149,7 @@ def linked_announcement(left, right) -> bool:
 
 
 def fingerprint(group: list) -> str:
-    content = ["quality-v4", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
+    content = ["quality-v5", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -218,9 +219,12 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
                 continue
             except Exception as exc:
                 store.record_editorial(latest['url'], 'merge_copy_failed', {'reason': safe_error(exc)})
+                if isinstance(exc, VerificationProtocolError):
+                    report.append('Merge held: invalid verification; latest approved version retained')
+                    continue
                 # No verification bypass: fall through to the existing editor.
         try:
-            draft = ollama_json(config, prompt, SCHEMA)
+            draft = ollama_json({**settings, '_llm_stage': 'merge_writer'}, prompt, SCHEMA)
             store.record_editorial(latest['url'], "merge_writer", {"fingerprint": key, "draft": draft})
             if draft.get("relevant") is not True:
                 raise ValueError("Merged story was not approved")
@@ -232,11 +236,15 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
                                  evidence=str(draft.get("evidence", "")))
                     break
                 except ValueError as exc:
-                    if attempt == 2 or time.monotonic() >= config.get("_deadline", float("inf")):
+                    if (attempt == 2 or isinstance(exc, VerificationProtocolError)
+                            or time.monotonic() >= config.get("_deadline", float("inf"))):
                         raise
                     store.record_editorial(latest['url'], "merge_revision", {"problem": str(exc)})
-                    draft = revise_draft(settings, latest['title'], evidence, draft, str(exc))
-                    store.record_editorial(latest['url'], "merge_revision_output", draft)
+                    revised = revise_draft(settings, latest['title'], evidence, draft, str(exc))
+                    store.record_editorial(latest['url'], "merge_revision_output", revised)
+                    if revised == draft:
+                        raise exc
+                    draft = revised
             # All merged details need original evidence. The latest short
             # availability notice cannot alone prove every complementary fact.
             issues = draft_issues(evidence, text)
@@ -285,9 +293,14 @@ def primary_links(config: dict, group: list) -> list[str]:
         if link not in links:
             links.append(link)
             linked_facts.add(facts)
-        if len(links) == 2:
+        if source.get('type') == 'x' and source.get('primary_account'):
+            related = telegram_evidence_url(row['summary'])
+            if (related and '[Связанный первоисточник,' in (row['article'] or '')
+                    and related in row['article'] and related not in links):
+                links.append(related)
+        if len(links) >= 2:
             break
-    return links
+    return links[:2]
 
 
 def fitted_card(fields: dict, links: list[str], budget: int) -> str:

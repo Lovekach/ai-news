@@ -183,10 +183,47 @@ including retries, and compare the final API text, not only draft JSON.
 
 The October 12–16 replay did not establish an overall quality score or fewer
 model calls. Retaining the style editor was safer than a faster experimental
-path. Remaining verifier objections can contradict their own verdict, and a
-numeric-presence check cannot establish the meaning or direction of a metric.
-Do not convert a negative verdict to approval by matching positive words in
-its explanation. Held stories may still contain other unsupported claims.
+path. A numeric-presence check cannot establish the meaning or direction of a
+metric. Do not convert a negative verdict to approval by matching positive words
+in its explanation. Held stories may still contain other unsupported claims.
+
+### Source-bound claims and measurements
+
+The verifier returns one status for every numbered draft claim, including the
+headline. It references locally numbered source fragments rather than generating
+quotations. Claim coverage, reference IDs and status/reason consistency are
+validated before approval. The private audit derives quotations and URLs from
+the captured source fragments; it preserves the model's raw response separately.
+An invalid verification protocol holds the story instead of rewriting its facts.
+This is still a model judgment: a valid reference does not itself prove entailment.
+
+A small shared vocabulary keeps metric, normalized value, unit, scope, measured
+conditions, subject and source together. Input, output, cached and aggregate
+rates, per-user versus per-GPU rates, TCO efficiency and API pricing, and preference
+versus complaint scores must not be interchanged. Shared comparison units do not
+establish ownership of a particular result. The semantic verifier checks that
+relationship. Unknown metrics and ambiguous number formats remain limitations.
+
+Source windows prioritize ownership/date restrictions and quantified outcomes,
+including people, pull requests, code lines and elapsed time. An official social
+post may fetch one linked primary article through the existing trusted-host
+policy during editing. Its captured text is cached privately; an unknown or older
+background date does not become today's event date. A secondary repost headline
+is a discovery signal, never evidence for numbers absent from its linked source.
+
+The style editor cannot overwrite the quantitative main paragraph or caveat.
+Targeted revisions retain unaffected fields and still undergo the factual gates.
+Untargeted quantitative sentences lost during repair are restored to the
+candidate only when their numbers occur in the source and semantic guards pass;
+the full verifier still checks their meaning and attribution. An invented
+no-loss guarantee in an optional explanation can be removed before verification;
+the main event and caveats cannot use that cleanup.
+Only an optional explanatory sentence may be removed without another model call,
+and only when every retained statement was already supported in that same check.
+Headlines, the main event and restrictions cannot use that shortcut. An unchanged
+revision ends the bounded repair loop. Private `llm_call` audit entries measure
+actual requests, stages, durations and JSON retries rather than counting logged
+editorial functions as model calls.
 
 Run the Windows regression suite with:
 

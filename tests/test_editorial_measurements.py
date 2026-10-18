@@ -108,20 +108,24 @@ class MeasurementTests(unittest.TestCase):
         import json
         documents = [{'title': 'App', 'published': '2026-10-13', 'text': 'App subscribers only.'},
                      {'title': 'API', 'published': '2026-10-13', 'text': 'API paid tier.'}]
-        with patch('ainews.pipeline.ollama_json', return_value={'supported': True, 'unsupported_claims': []}) as model:
+        with patch('ainews.pipeline.ollama_json', return_value={'checks': [
+                {'id': 0, 'status': 'supported', 'evidence_ids': [0], 'issue': ''}]}) as model:
             verify_draft({'_daily_merge': True, '_source_documents': documents}, 'Rollout',
                          'App subscribers only. API paid tier.', 'Открыт доступ.')
-        self.assertEqual(json.loads(model.call_args.args[1])['source'], documents)
+        sources=json.loads(model.call_args.args[1])['source']
+        self.assertEqual([s['published'] for s in sources],[s['published'] for s in documents])
+        self.assertEqual([s['fragments'][0]['text'] for s in sources],[s['text'] for s in documents])
 
     def test_many_source_documents_cannot_expand_existing_evidence_budget(self):
         import json
         documents = [{'title': 'Announcement', 'text': 'Original source. '*600}]*5
-        with patch('ainews.pipeline.ollama_json', return_value={'supported': True, 'unsupported_claims': []}) as model:
+        with patch('ainews.pipeline.ollama_json', return_value={'checks': [
+                {'id': 0, 'status': 'supported', 'evidence_ids': [0], 'issue': ''}]}) as model:
             verify_draft({'_daily_merge': True, '_source_documents': documents}, 'Rollout',
                          'Original source. '*1200, 'Подтверждённое сообщение.')
         source = json.loads(model.call_args.args[1])['source']
-        self.assertIsInstance(source, str)
-        self.assertLessEqual(len(source), 7000)
+        self.assertIsInstance(source, list)
+        self.assertLessEqual(sum(len(f['text']) for d in source for f in d['fragments']), 7000)
 
     def test_editorial_availability_instruction_is_not_published_as_a_fact(self):
         source = 'Nova2.0 is now globally available on the paid API tier.'
@@ -226,14 +230,14 @@ class MeasurementTests(unittest.TestCase):
         check_semantic_claims(source, 'Vera 2.0 лидирует по суммарному индексу\nЭто результат теста.')
 
     def test_verifier_cannot_erase_a_rejection_with_later_approvals(self):
-        replies = [{'supported': False, 'unsupported_claims': ['Wrong unit']},
-                   {'supported': True, 'unsupported_claims': []}]
+        replies = [{'checks': [{'id': 0, 'status': 'unsupported', 'evidence_ids': [], 'issue': 'Wrong unit'}]},
+                   {'checks': [{'id': 0, 'status': 'supported', 'evidence_ids': [0], 'issue': ''}]}]
         with patch('ainews.pipeline.ollama_json', side_effect=replies) as model:
             with self.assertRaisesRegex(ValueError, 'Wrong unit'):
                 verify_draft({}, 'Model', 'Context is large.', 'Контекст большой.')
         model.assert_called_once()
         self.assertIn('_chat_system', model.call_args.args[0])
-        self.assertEqual(model.call_args.kwargs['max_predict'], 500)
+        self.assertLessEqual(model.call_args.kwargs['max_predict'], 2400)
 
     def test_native_chat_protocol_keeps_instructions_and_evidence_separate(self):
         import json

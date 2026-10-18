@@ -263,7 +263,9 @@ class GateTests(unittest.TestCase):
 
     def test_long_draft_fact_check_requires_revision_after_rejection(self):
         responses = [
-            {"supported": False, "unsupported_claims": ["Unclear in long text"]},
+            {"checks": [{'id': i, 'status': 'unsupported' if i == 0 else 'supported',
+                         'evidence_ids': [0],
+                         'issue': 'Unclear in long text' if i == 0 else ''} for i in range(5)]},
             {"supported": True, "unsupported_claims": []},
             {"supported": True, "unsupported_claims": []},
         ]
@@ -359,7 +361,7 @@ class StoreTests(unittest.TestCase):
             with patch("ainews.pipeline.article_details", return_value=(article, None)), \
                  patch("ainews.pipeline.generate_draft", return_value=draft), \
                  patch("ainews.pipeline.polish_draft", return_value=draft), \
-                 patch("ainews.pipeline.revise_draft", return_value=draft) as revise, \
+                 patch("ainews.pipeline.revise_draft", return_value={**draft, 'simple_explanation': ''}) as revise, \
                  patch("ainews.pipeline.verify_draft", side_effect=[ValueError("unsupported"), None]) as verify:
                 report = prepare(config, store, limit=1)
                 self.assertIn("SKIP old", report[0])
