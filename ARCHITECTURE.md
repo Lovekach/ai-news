@@ -42,7 +42,9 @@ Keep the ledger when moving an installation. A second copy with a fresh database
 
 Coverage depends on source access. Checks do not independently verify every source assertion. Grouping may miss unusual wording or conflate ambiguous event descriptions.
 
-`editorial_audit` retains decisions, verification results and revision reasons.
+`editorial_audit` retains decisions, per-claim source references, measurement
+bindings, actual model-call timings and revision reasons. Linked primary
+background is cached there without changing the source post's event date.
 `source_dates` separates publication/update/event dates; discovery stays in
 `items.created_at`. Unknown dates are retained as null. Deterministic guards run
 again on approved, merged and shortened cards. See

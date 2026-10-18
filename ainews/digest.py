@@ -125,7 +125,8 @@ def card(fields: dict[str, str], max_chars: int | None = None, *, detail_first: 
     selected["caveat"] = sections["caveat"][:]
     # A measured result and its comparison conditions are information, even
     # when the small writer incorrectly put them in an explanatory field.
-    quantified = re.compile(r"\d+(?:[.,]\d+)?\s*(?:%|процент\w*|раза\b|балл\w*|секунд\w*)", re.I)
+    quantified = re.compile(r"\d+(?:[.,]\d+)?\s*(?:(?:тыс\.?|млн\.?)\s*)?(?:%|процент\w*|раза\b|балл\w*|секунд\w*|"
+                            r"PR\b|pull requests?\b|строк\w*\s+кода|инженер\w*|задач\w*|недел\w*)", re.I)
     for key in ("simple", "why"):
         selected[key] = [sentence for sentence in sections[key] if quantified.search(sentence) or important.search(sentence)]
     if len(render(selected)) > max_chars:
