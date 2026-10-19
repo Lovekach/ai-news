@@ -67,6 +67,12 @@ class EvidencePackets(unittest.TestCase):
         docs, _ = retrieve(row, {'type': 'telegram'}, lambda url: ('Aster was released.', None))
         self.assertEqual([d.text for d in docs], ['Aster was released.'])
 
+    def test_repository_evidence_retains_owner_and_project_scope(self):
+        row = {'url': 'https://t.me/example/1', 'published': '2026-10-18',
+               'summary': 'Read https://github.com/vendor/aster'}
+        docs, _ = retrieve(row, {'type': 'telegram'}, lambda url: ('Aster documentation.', None))
+        self.assertEqual((docs[0].publisher, docs[0].project), ('vendor', 'aster'))
+
     def test_primary_subdomains_are_recognized_without_accepting_lookalike_hosts(self):
         links = linked_primary_urls('https://developers.openai.com/blog/test https://github.com.evil.example/test')
         self.assertEqual(links, ['https://developers.openai.com/blog/test'])
@@ -154,6 +160,100 @@ class FactEditor(unittest.TestCase):
         with patch('ainews.fact_first.ollama_json', return_value=raw):
             _, _, facts, _ = extract({}, value)
         self.assertFalse(facts)
+
+    def test_continuation_facts_do_not_require_a_second_event(self):
+        value = packet([Document('https://official.example',
+            'Aster released a model.\n\nOutput rate is 150 tokens/s on B200.')],
+            edition_date='2026-10-18', official=True)
+        continuation = {**self.extraction, 'has_event': False,
+            'facts': [{**self.row, 'text': 'Вывод составляет 150 токенов в секунду на B200.',
+                       'value': '150', 'metric': 'output_rate', 'span_ids': ['s1']}]}
+        with patch('ainews.fact_first.chunks', return_value=[(value.spans[0],), (value.spans[1],)]), \
+             patch('ainews.fact_first.ollama_json', side_effect=[self.extraction, continuation]):
+            event, _, facts, reason = extract({}, value)
+        self.assertFalse(reason)
+        self.assertEqual(event['product'], 'Aster')
+        self.assertEqual(len(facts), 2)
+        self.assertEqual(facts[1].span_ids, ('s1',))
+
+    def test_measurements_without_an_initial_event_do_not_create_one(self):
+        with patch('ainews.fact_first.ollama_json', return_value={**self.extraction, 'has_event': False}):
+            event, _, facts, _ = extract({}, self.evidence)
+        self.assertFalse(event)
+        self.assertFalse(facts)
+
+    def test_scaled_number_words_are_equivalent_but_do_not_approve_invented_values(self):
+        value = packet([Document('https://official.example',
+            'Aster supports two million tokens of context.')], edition_date='2026-10-18', official=True)
+        raw = {**self.extraction, 'facts': [{**self.row,
+            'text': 'Aster поддерживает контекст 2 млн токенов.', 'value': '2M'}]}
+        with patch('ainews.fact_first.ollama_json', return_value=raw):
+            _, _, facts, error = extract({}, value)
+        self.assertFalse(error)
+        self.assertEqual(len(facts), 1)
+        raw['facts'][0]['text'] = 'Aster поддерживает контекст 9 млн токенов.'
+        with patch('ainews.fact_first.ollama_json', return_value=raw):
+            _, _, facts, _ = extract({}, value)
+        self.assertFalse(facts)
+
+    def test_writer_may_reference_six_verified_facts_in_one_paragraph(self):
+        facts = [self.fact(id=f'f{i}', text=f'Подробность номер {i} подтверждена.') for i in range(6)]
+        written = {'headline': {'text': self.extraction['headline'], 'fact_ids': ['f0']},
+            'paragraphs': [{'text': ' '.join(f.text for f in facts), 'fact_ids': [f.id for f in facts]}]}
+        with patch('ainews.fact_first.extract', return_value=(self.event, self.extraction['headline'], facts, '')), \
+             patch('ainews.fact_first.verify_facts', return_value=(facts, '')), \
+             patch('ainews.fact_first.ollama_json', side_effect=[written, {'supported': True, 'issues': []}]):
+            result = edit({}, self.evidence, mode='writer')
+        self.assertEqual(result.state, 'ready')
+
+    def test_third_party_repository_cannot_establish_another_company_release(self):
+        source = packet([Document('https://github.com/outsider/boreal',
+            'Boreal uses Aster. Aster was released.', project='boreal', publisher='outsider')],
+            edition_date='2026-10-18', official=False)
+        with patch('ainews.fact_first.extract', return_value=(self.event, self.extraction['headline'], [self.fact()], '')), \
+             patch('ainews.fact_first.verify_facts') as verifier:
+            result = edit({}, source)
+        self.assertEqual(result.state, 'needs_review')
+        self.assertIn('authority', result.reason)
+        verifier.assert_not_called()
+
+    def test_undated_repository_overview_is_not_a_dated_release_announcement(self):
+        source = packet([Document('https://github.com/vendor/aster', 'Aster documentation.',
+            project='aster', publisher='vendor')], edition_date='2026-10-18', official=False)
+        with patch('ainews.fact_first.extract', return_value=(self.event, self.extraction['headline'], [self.fact()], '')):
+            result = edit({}, source)
+        self.assertIn('no dated', result.reason)
+        self.assertEqual(result.state, 'needs_review')
+
+    def test_exact_project_release_can_reach_source_verification(self):
+        source = packet([Document('https://github.com/vendor/aster/releases/tag/v1',
+            'Aster released.', '2026-10-18T12:00:00Z', project='aster', publisher='vendor')],
+            edition_date='2026-10-18', official=False)
+        with patch('ainews.fact_first.extract', return_value=(self.event, self.extraction['headline'], [self.fact()], '')), \
+             patch('ainews.fact_first.verify_facts', return_value=([self.fact()], '')) as verifier:
+            self.assertEqual(edit({}, source).state, 'ready')
+        verifier.assert_called_once()
+
+    def test_verifier_receives_link_free_fact_wording_and_evidence_stays_private(self):
+        raw = {**self.extraction, 'facts': [{**self.row,
+            'text': 'Aster выпустила [модель](https://official.example/model) для локального запуска.'}]}
+        with patch('ainews.fact_first.ollama_json', side_effect=[raw, self.verdict]) as model:
+            result = edit({}, self.evidence)
+        self.assertEqual(result.state, 'ready')
+        checked = __import__('json').loads(model.call_args_list[1].args[1])
+        self.assertNotIn('https://', checked['facts'][0]['text'])
+        self.assertIn('модель', checked['facts'][0]['text'])
+        self.assertIn('https://', raw['facts'][0]['text'])
+        self.assertEqual(self.evidence.documents[0].url, 'https://official.example/report')
+
+    def test_required_url_value_cannot_be_removed_from_a_verified_fact(self):
+        raw = {**self.extraction, 'facts': [{**self.row,
+            'text': 'Адрес API — https://official.example/api.', 'value': 'https://official.example/api'}]}
+        with patch('ainews.fact_first.ollama_json', return_value=raw) as model:
+            result = edit({}, self.evidence)
+        self.assertEqual(result.state, 'needs_review')
+        self.assertIn('URL value', result.reason)
+        self.assertEqual(model.call_count, 1)
 
     def test_citation_presence_does_not_bypass_negative_entailment(self):
         bad = {**self.verdict, 'checks': [{'id': 'f0', 'supported': False, 'issue': 'Wrong product owner.'}]}

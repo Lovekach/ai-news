@@ -27,12 +27,12 @@ not hypothetical errors attributed to every item.
 | Stage | Existing behavior | Failure mechanism / experimental change |
 | --- | --- | --- |
 | Discovery | RSS, Telegram and X adapters retain source text and dates in SQLite. | Discovery time, feed update time and event time are different. An item discovered after an edition cannot be counted as an editorial rejection by that edition. |
-| Retrieval | Bounded source enrichment, selected primary hosts, text extraction and source windows. | Flattening HTML can lose table headers and pricing scopes. A source window can omit conditions present later in a long page. The experiment preserves headings, table rows, document identity and paragraph spans. |
+| Retrieval | Bounded source enrichment, selected primary hosts, text extraction and source windows. | Flattening HTML can lose table headers and pricing scopes. A source window can omit conditions present later in a long page. The experiment preserves headings, table rows, document identity and paragraph spans. A repository's owner/project scope does not establish announcements about somebody else's dependency. |
 | Event detection | Relevance decisions and heuristic event signatures accompany writing. | A repeated product name does not establish the same event. The experiment records company, product, version, event kind, scope and independently evidenced event date. |
-| Fact extraction | The writer creates prose before the complete structured claim ledger. | Correct numbers can be attached to the wrong object or scope. The experiment extracts typed facts with individual provenance before prose. |
+| Fact extraction | The writer creates prose before the complete structured claim ledger. | Correct numbers can be attached to the wrong object or scope. The experiment extracts typed facts with individual provenance before prose. Later source chunks need not announce a second event to contribute facts to the established target. |
 | Verification | Numeric rules, claim verification and bounded revisions use the same local model. | A citation ID proves provenance, not entailment. Narrow unit patterns can reject a correct measurement; a missed qualifier can survive several correlated model calls. The experiment verifies complete source chunks and the fields and publishable wording of each fact. |
 | Writing | Writer, style editor and up to two revisions can restate explanations. | Forced explanatory fields encourage repetition; number-preserving edits can retain awkward Russian. B writes only from verified facts; C assembles independently verified Russian fact sentences without a second free prose generation. |
-| Final audit | Existing integrity, numeric, link-removal and length gates. | A valid final length does not prove preserved meaning. The experiment drops only whole paragraphs and retains mandatory facts and limitations; material that cannot fit is withheld. |
+| Final audit | Existing integrity, numeric, link-removal and length gates. | A valid final length does not prove preserved meaning. Public wording is sanitized before source/final verification. Removing a required URL-valued fact is prohibited; it requires rewriting or review. The experiment drops only whole paragraphs and retains mandatory facts and limitations; material that cannot fit is withheld. |
 | Publication | Existing Moscow-day selection, private archive, reservation ledger, API adapter and uncertain-send protection. | Reuse this boundary, with a supplied experimental composer only in isolated runs. Never exercise real Telegram in the benchmark. |
 
 All model stages use the existing local Qwen 3.5 9B. The experimental verifier
@@ -75,8 +75,17 @@ must be reported as unavailable, never as zero.
   of verified Russian sentences. This is an alternative generation scheme,
   not a claim that a larger model fits the laptop.
 
-The private corpus contains 20 development records and 14 held-out records
-from real source material. The partition, original records, raw HTTP captures,
+The private corpus contains 20 development records, 14 initially held-out
+records and 12 newly reserved records from real source material. The original
+14 were opened for reference preparation after an initial candidate seal. Later
+development exposed implementation defects, so those 14 are now **unsealed
+validation data**, not an independent blind test for subsequent candidates.
+They remain preserved. The replacement independent split is a new, metadata-only
+reservation of 12 other records, not a favorable selection of prior outcomes.
+Its bodies remain unopened during candidate development. The final paired
+comparison uses 20 development plus 12 fresh records, subject to a disclosed
+event-overlap audit; reservation strata describe source pools, not assumed event
+types. The partition, original records, raw HTTP captures,
 implementation files and source-derived gold facts are hashed. Raw responses
 are identical across variants; each variant executes its own actual parser.
 Source content is not edited to improve results. Source text, SQLite, prompts
@@ -91,6 +100,14 @@ run remains in the audit. Before opening holdout source bodies, freeze the
 candidate and record the acceptance protocol. Then prepare source-grounded
 holdout references before examining model output. No prompt changes, case
 replacement or selective reruns may be based on holdout results.
+
+The initial reference audit also found chronology/novelty assumptions that
+needed correction. Original gold files are retained alongside explicit errata;
+uncertain publication eligibility must not count as a proven false rejection.
+External reference checks absent from a model's frozen input do not establish
+that the model ignored information it was actually given. References are prepared
+by the development assistant outside target Qwen, not by an independent human
+review panel. This limits evaluator independence and must remain disclosed.
 
 For every output record critical factual errors, unsupported claims, missing
 essential facts, false rejections, correctly published unique events,
@@ -120,6 +137,30 @@ resource use. This is not a guarantee about future unseen events. Green CI,
 more accepted stories or fewer model calls alone do not meet this criterion.
 If the experiment fails, keep production unchanged and leave the experimental
 branch and an explicit failure report for review.
+
+## Preserved development trials
+
+These are diagnostic runs, **not final holdout results or a deployment claim**.
+
+| Development trial (20 records) | Actual calls | Case wall time, seconds | Mock-published stories |
+| --- | ---: | ---: | ---: |
+| A, immutable stable baseline | 58 | 985.407 | 13 |
+| C2, first complete fact-first prototype | 43 | 1103.609 | 0 |
+| C3, superseded prototype | 36 | 871.601 | 12 |
+
+C2 generated 27,552 tokens versus A's 20,495; approximately 997 seconds of C2's
+native time was decoding, versus 809 seconds for A. Fewer requests did not mean
+less model work. A's sampled total GPU peak was 7,546 MiB; C2's was 7,239 MiB.
+These are three-second samples including desktop use, not guaranteed true peaks.
+
+C3 still exposed confirmed development defects: a repository overview was used
+as authority for another product's release; URL removal after verification
+could leave a grammatically punctuated but empty address assertion; and later
+chunks were discarded even when the extractor returned relevant facts for the
+existing event. A correct quantity expressed in words could also fail a numeric
+presence check. Those defects prompted the next candidate and the new independent
+reservation. No trial or partial interrupted diagnostic is erased or reported
+as a successful experiment.
 
 Known prototype limits include bounded extraction of very long documents,
 correlated extractor/verifier errors, incomplete retrieval of social threads,

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from .evidence import Packet, chunks
 from .measurements import numeric_values
@@ -77,10 +79,29 @@ def _call(config, stage, system, data, schema, predict):
                        json.dumps(data, ensure_ascii=False), schema, max_predict=predict)
 
 
-def _references(ids, spans):
-    return (isinstance(ids, list) and bool(ids) and len(ids) <= 5
+def _references(ids, spans, limit=5):
+    return (isinstance(ids, list) and bool(ids) and len(ids) <= limit
             and all(isinstance(i, str) and i in spans for i in ids)
             and len(set(ids)) == len(ids))
+
+
+def _numbers(text):
+    """Normalize explicit small cardinal-plus-scale phrases, not inferred values.
+
+    This is a bounded language normalization, not an entailment check. Compound
+    numbers outside this vocabulary remain with the conservative number guard.
+    """
+    words = dict(zip('zero one two three four five six seven eight nine ten eleven twelve'.split(), range(13)))
+    words.update(dict(zip('ноль один два три четыре пять шесть семь восемь девять десять одиннадцать двенадцать'.split(), range(13))))
+    words.update({'одна': 1, 'одно': 1, 'две': 2})
+    scales = {'thousand': 1000, 'million': 1000000, 'billion': 1000000000,
+              'тысяча': 1000, 'тысячи': 1000, 'тысяч': 1000,
+              'миллион': 1000000, 'миллиона': 1000000, 'миллионов': 1000000,
+              'миллиард': 1000000000, 'миллиарда': 1000000000, 'миллиардов': 1000000000}
+    pattern = r'\b(' + '|'.join(words) + r')\s+(' + '|'.join(sorted(scales, key=len, reverse=True)) + r')\b'
+    value = unicodedata.normalize('NFKC', text).casefold()
+    value = re.sub(pattern, lambda m: str(words[m[1]] * scales[m[2]]), value)
+    return numeric_values(value)
 
 
 def _unbound_numbers(text, source, event, spans):
@@ -97,7 +118,7 @@ def _unbound_numbers(text, source, event, spans):
     product = normalize(str(event.get('product', '')))
     if len(product) >= 3 and any(c.isalpha() for c in product) and product in provenance:
         text, source = text.replace(product, ''), source.replace(product, '')
-    return numeric_values(text) - numeric_values(source)
+    return _numbers(text) - _numbers(source)
 
 
 def extract(config, evidence: Packet) -> tuple[dict, str, list[Fact], str]:
@@ -135,8 +156,15 @@ def extract(config, evidence: Packet) -> tuple[dict, str, list[Fact], str]:
             'kind описывает смысл предложения: числа не делают факт ограничением. '
             'essential=true только для события и фактов, без которых читатель поймёт его неверно; '
             'не объявляй все дополнительные характеристики обязательными. '
+            'Основные результаты, измеримые изменения и их ограничения важнее вводного описания '
+            'компании и биографий; основные результаты помечай essential=true. Лицензия весов, '
+            'код инференса и код обучения имеют разную область действия: сохрани её в text. '
             'Заголовок — продукт и конкретное событие, до 12 слов, закончи все слова и названия, '
             'без превосходных степеней вне источника. '
+            'В text и заголовке не пиши URL и блоки ссылок: происхождение уже хранится в span_ids. '
+            'Не выбирай факты, смысл которых сводится к адресу URL. '
+            'Документ репозитория с project является первоисточником для этого проекта. '
+            'Его пересказ чужой модели не является официальным анонсом её разработчика. '
             'headline_span_ids подтверждают весь заголовок, включая его числа и связи. '
             'При наличии target извлекай только относящиеся к нему факты. Ответь JSON.')
         data = {'source': evidence.context(part), 'target': event or None,
@@ -150,22 +178,24 @@ def extract(config, evidence: Packet) -> tuple[dict, str, list[Fact], str]:
             config['_audit']('fact_extraction', {'packet': evidence.fingerprint, 'part': index, 'response': raw})
         if not isinstance(raw.get('has_event'), bool) or not isinstance(raw.get('facts'), list):
             return {}, '', [], 'Invalid extraction protocol'
-        if not raw['has_event']:
+        # A continuation need not introduce a second event. It may contain the
+        # main measurements and caveats for the already identified target.
+        if not raw['has_event'] and not event:
             continue
         lookup = {s.id: s for s in evidence.spans}
         proposed = raw.get('event')
-        if (not isinstance(proposed, dict) or set(proposed) != set(EVENT['properties'])
+        if raw['has_event'] and (not isinstance(proposed, dict) or set(proposed) != set(EVENT['properties'])
                 or not _references(proposed.get('span_ids'), lookup)
                 or not all(isinstance(proposed[k], str) for k in EVENT['properties'] if k != 'span_ids')
                 or proposed['kind'] not in EVENT['properties']['kind']['enum']):
             return {}, '', [], 'Event has no captured source references'
-        if proposed['date']:
+        if raw['has_event'] and proposed['date']:
             try:
                 date.fromisoformat(proposed['date'])
             except ValueError:
                 return {}, '', [], 'Invalid event date; no date inference allowed'
         if not event:
-            event, headline = proposed, str(raw.get('headline', ''))
+            event, headline = proposed, public_text(str(raw.get('headline', '')))
             headline_sources = raw.get('headline_span_ids')
             if not _references(headline_sources, lookup):
                 return {}, '', [], 'Headline has no captured source references'
@@ -179,6 +209,13 @@ def extract(config, evidence: Packet) -> tuple[dict, str, list[Fact], str]:
                     or row.get('kind') not in FACT['properties']['kind']['enum']):
                 return {}, '', [], 'Invalid fact fields or provenance'
             source = ' '.join(lookup[i].text for i in row['span_ids'])
+            if urlparse(row['value']).scheme.casefold() in {'http', 'https', 'ftp', 'tg', 'mailto'}:
+                if row['essential']:
+                    return {}, '', [], 'Essential fact depends on a URL value; source-checked rewriting is required'
+                continue
+            # Verify the exact public wording, not prose that will later lose
+            # its object when a URL is removed at the presentation boundary.
+            row = {**row, 'text': public_text(row['text'])}
             if _unbound_numbers(' '.join(row[k] for k in ('text', 'value', 'conditions', 'comparison')),
                                 source, event, lookup):
                 continue
@@ -223,6 +260,9 @@ def verify_facts(config, evidence: Packet, event: dict, headline: str, facts: li
             'доказывает связь. Точная цитата не означает, что русский текст ей соответствует. '
             'В публикацию попадёт только text: правильные conditions/comparison в метаданных '
             'не компенсируют потерю существенных условий в самом русском предложении. '
+            'Проверь целостность смысла каждого text после удаления ссылок: предложение '
+            'с пропавшим адресом, числом или объектом не является содержательным фактом. '
+            'Не переноси лицензию кода инференса на веса или весь исходный код модели. '
             'Не требуй несвязанные детали. supported=true только при полном подтверждении, issue пустой; '
             'Проверяй смысл, а не буквальное совпадение слов: корректный перевод, сокращённое '
             'общеизвестное название компании и перестановка частей предложения сами по себе не ошибка. '
@@ -269,6 +309,26 @@ def verify_facts(config, evidence: Packet, event: dict, headline: str, facts: li
     return approved, ''
 
 
+def _authority_issue(evidence: Packet, event: dict) -> str:
+    """A repository is first-party evidence for its project, not dependencies."""
+    if any(d.role == 'official_post' for d in evidence.documents):
+        return ''
+    projects = [d for d in evidence.documents if d.project]
+    if not projects or len(projects) != len(evidence.documents):
+        return ''  # Other source classes remain with source-based verification.
+    key = lambda value: re.sub(r'\W|_', '', unicodedata.normalize('NFKC', value).casefold())
+    related = any(key(event.get('product', '')) == key(d.project)
+                  or (event.get('scope') and key(event['scope']) == key(d.project))
+                  or (event.get('company') and key(event['company']) == key(d.publisher))
+                  for d in projects)
+    if not related:
+        return 'Repository authority does not establish a third-party product announcement'
+    if event['kind'] in {'release', 'update'} and all(
+            len(urlparse(d.url).path.strip('/').split('/')) == 2 and not d.published for d in projects):
+        return 'Repository overview has no dated primary release or update announcement'
+    return ''
+
+
 def audit_text(text: str, facts: list[Fact], *, limit=3900, approved_headline=None) -> None:
     assert_public_text(text, limit)
     head, _, body = text.partition('\n\n')
@@ -278,7 +338,7 @@ def audit_text(text: str, facts: list[Fact], *, limit=3900, approved_headline=No
     if approved_headline is not None and headline != approved_headline:
         raise ValueError('Final headline differs from the independently verified headline')
     claims = body if approved_headline is not None else text
-    if numeric_values(claims) - numeric_values(' '.join(f.text for f in facts)):
+    if _numbers(claims) - _numbers(' '.join(f.text for f in facts)):
         raise ValueError('Final text introduced a number absent from verified facts')
 
 
@@ -297,6 +357,8 @@ def _edit(config, evidence: Packet, *, mode='assembly') -> Result:
     event, headline, extracted, error = extract(config, evidence)
     if error or not event:
         return Result('needs_review', error or 'No concrete source event', event, ())
+    if error := _authority_issue(evidence, event):
+        return Result('needs_review', error, event, tuple(extracted))
     facts, error = verify_facts(config, evidence, event, headline, extracted)
     if error:
         return Result('needs_review', error, event, tuple(facts))
@@ -320,8 +382,10 @@ def _edit(config, evidence: Packet, *, mode='assembly') -> Result:
             {'event': event, 'facts': [asdict(f) for f in facts]},
             obj({'headline': clause, 'paragraphs': array(clause, 8)}), 1500)
         clauses = [raw.get('headline'), *raw.get('paragraphs', [])]
-        if any(not isinstance(c, dict) or not c.get('text') or not _references(c.get('fact_ids'), {f.id: f for f in facts}) for c in clauses):
+        if any(not isinstance(c, dict) or not isinstance(c.get('text'), str) or not c['text'].strip()
+               or not _references(c.get('fact_ids'), {f.id: f for f in facts}, len(facts)) for c in clauses):
             return Result('needs_review', 'Writer claim lacks verified fact references', event, tuple(facts))
+        clauses = [{**c, 'text': public_text(c['text'])} for c in clauses]
         referenced = {i for c in clauses for i in c['fact_ids']}
         if any(f.essential and f.id not in referenced for f in facts):
             return Result('needs_review', 'Writer omitted an essential verified fact', event, tuple(facts))
@@ -337,8 +401,8 @@ def _edit(config, evidence: Packet, *, mode='assembly') -> Result:
         headline = clauses[0]['text']
         paragraphs = tuple(c['text'] for c in clauses[1:])
         paragraph_facts = tuple(tuple(c['fact_ids']) for c in clauses[1:])
-    headline = public_text(headline)
-    paragraphs = tuple(public_text(p) for p in paragraphs)
+    if any(public_text(t) != t for t in (headline, *paragraphs)):
+        return Result('needs_review', 'Presentation changed after source verification', event, tuple(facts))
     text = '\n\n'.join((headline, *paragraphs))
     try:
         # The complete private result may exceed Telegram; the publication
@@ -351,7 +415,7 @@ def _edit(config, evidence: Packet, *, mode='assembly') -> Result:
 
 def edit(config, evidence: Packet, *, mode='assembly', cache=None) -> Result:
     """Optional caller-owned cache; policy/model/date/source changes invalidate it."""
-    key = (config.get('model'), mode, 'fact-first-experiment-v1', replace(evidence, title='').fingerprint)
+    key = (config.get('model'), mode, 'fact-first-experiment-v2', replace(evidence, title='').fingerprint)
     if cache is not None and key in cache:
         return cache[key]
     result = _edit(config, evidence, mode=mode)

@@ -169,8 +169,11 @@ def retrieve(row, source: dict, loader=primary_document, *, deadline=float('inf'
         try:
             text, published = loader(url)
             if text.strip():
+                parsed = urlparse(url)
+                parts = parsed.path.strip('/').split('/')
+                owner, project = (parts[0], parts[1]) if parsed.hostname == 'github.com' and len(parts) >= 2 else ('', '')
                 documents.append(Document(url, text, published, 'primary_article' if not official or not social
-                                          else 'linked_background'))
+                                          else 'linked_background', owner, project))
         except Exception as exc:
             failures.append({'url': url, 'error_type': type(exc).__name__})
     if official and social:
@@ -187,6 +190,7 @@ class Document:
     published: str | None = None
     role: str = 'primary'
     publisher: str = ''
+    project: str = ''
 
 
 @dataclass(frozen=True)
@@ -211,7 +215,7 @@ class Packet:
     def context(self, spans=None):
         chosen = self.spans if spans is None else spans
         return {'documents': [{'id': i, 'url': d.url, 'published': d.published, 'role': d.role}
-                              | {'publisher': d.publisher} for i, d in enumerate(self.documents)],
+                              | {'publisher': d.publisher, 'project': d.project} for i, d in enumerate(self.documents)],
                 'spans': [asdict(s) for s in chosen], 'edition_date': self.edition_date,
                 'official': self.official, 'signal_title': self.title}
 
