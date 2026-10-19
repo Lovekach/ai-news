@@ -170,3 +170,8 @@ correlated extractor/verifier errors, incomplete retrieval of social threads,
 and no proof yet of complementary-fact merging or day-scale capacity. Event
 identity currently prevents exact duplicates; it does not resolve conflicting
 updates automatically. These must not be advertised as solved by provenance IDs.
+
+## Final measured outcome
+
+See [the comparison results](editorial-quality-v2-results.md). Neither candidate
+met deployment acceptance; production remains unchanged and the PR stays draft.
