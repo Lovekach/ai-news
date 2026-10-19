@@ -306,6 +306,21 @@ class FactEditor(unittest.TestCase):
             result = edit({}, self.evidence, mode='writer')
         self.assertEqual(result.state, 'needs_review')
 
+    def test_writer_verifies_source_language_facts_before_russian_generation(self):
+        native = {**self.extraction, 'headline': 'Aster releases a local model',
+            'facts': [{**self.row, 'text': 'Aster released a model for local use.'}]}
+        written = {'headline': {'text': self.extraction['headline'], 'fact_ids': ['f0']},
+            'paragraphs': [{'text': self.row['text'], 'fact_ids': ['f0']}]}
+        with patch('ainews.fact_first.ollama_json', side_effect=[native, self.verdict, written,
+                    {'supported': True, 'issues': []}]) as model:
+            result = edit({}, self.evidence, mode='writer')
+        self.assertEqual(result.state, 'ready')
+        verified = __import__('json').loads(model.call_args_list[1].args[1])['facts']
+        writer_input = __import__('json').loads(model.call_args_list[2].args[1])['facts']
+        self.assertEqual(verified[0]['text'], 'Aster released a model for local use.')
+        self.assertEqual(writer_input[0]['text'], verified[0]['text'])
+        self.assertEqual(result.paragraphs, (self.row['text'],))
+
     def test_cache_reuses_only_same_model_mode_date_and_captured_evidence(self):
         cache = {}
         with patch('ainews.fact_first.ollama_json', side_effect=[self.extraction, self.verdict]) as model:

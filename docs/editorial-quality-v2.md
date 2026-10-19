@@ -69,10 +69,13 @@ must be reported as unavailable, never as zero.
 ## Comparison protocol
 
 * A: immutable stable production code at `f0308cd`, using Qwen 3.5 9B.
-* B: source-first typed extraction, source verification, fact-only writer and
-  final verification, using the same Qwen model and runtime settings.
-* C: the same extraction and verification, followed by deterministic assembly
-  of verified Russian sentences. This is an alternative generation scheme,
+* B: source-first typed extraction in the source language, source verification,
+  a Russian fact-only writer and final verification, using the same Qwen model
+  and runtime settings. Translation happens after fact verification.
+* C: extraction into Russian fact sentences, source verification, followed by
+  deterministic assembly. B and C intentionally differ in both fact language
+  and writing scheme; this is not a one-variable writing-only comparison.
+  This is an alternative generation scheme,
   not a claim that a larger model fits the laptop.
 
 The private corpus contains 20 development records, 14 initially held-out
