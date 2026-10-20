@@ -463,13 +463,13 @@ def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
 
 
 def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | None = None,
-                  token_reader=None, sender=None) -> list[str]:
+                  token_reader=None, sender=None, composer=None) -> list[str]:
     from .telegram import read_token, send_message
     current = local_now(now)
     slot, _, _ = window(current)
     if not config.get("auto_publish") or not config.get("channel_id") or not publication_window(current) or store.digest(slot):
         return []
-    edition = compose_daily(config, store, current)
+    edition = (composer or compose_daily)(config, store, current)
     for url, reason in edition.discarded:
         if reason.startswith("Quality review required"):
             store.record_editorial(url, "final_quality_gate", {"state": "needs_review", "reason": reason})
