@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -171,6 +171,9 @@ class FinalGateIsolation(unittest.TestCase):
                       'measured': '500 токенов/с на пользователя на четырёх NVIDIA GB300 с NVFP4.'}
             for url in sources:
                 store.add_feed('official', [Entry('official', url, url, (now-timedelta(hours=1)).isoformat(), sources[url])], include_existing=True)
+                with store.db:
+                    store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                        ((now-timedelta(hours=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), url))
                 store.set_state(url, 'ready', article=sources[url], draft='🧠 Новость '+url+'\n\nЧто произошло: '+drafts[url])
             def broken_compaction(cards, limit):
                 return [(card(fields) if group[0]['url']=='good' else '- measured\n\n500 токенов/с.', group)
@@ -192,6 +195,9 @@ class FinalGateIsolation(unittest.TestCase):
             for url, text in [('good', 'Nova 2.0 получила поддержку файлов.'),
                               ('bad', 'Доступность по всему миру не означает доступ для всех тарифов.')]:
                 store.add_feed('official', [Entry('official', url, url, (now - timedelta(hours=1)).isoformat(), 'GPU update.')], include_existing=True)
+                with store.db:
+                    store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                        ((now-timedelta(hours=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), url))
                 store.set_state(url, 'ready', article='GPU update.',
                                 draft='🧠 Новость '+url+'\n\nЧто произошло: '+text)
             sender = Mock(return_value=12)
@@ -211,6 +217,9 @@ class FinalGateIsolation(unittest.TestCase):
             for url, title, summary in [('https://vendor.example/news/office', 'Acme opens an office', 'Office opened.'),
                                         ('https://x.com/acme/status/123', 'We opened an office', 'Read https://vendor.example/news/office')]:
                 store.add_feed('official', [Entry('official', title, url, (now - timedelta(hours=1)).isoformat(), summary)], include_existing=True)
+                with store.db:
+                    store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                        ((now-timedelta(hours=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), url))
                 store.set_state(url, 'ready', article=summary,
                                 draft='🧠 '+title+'\n\nЧто произошло: Открыт офис в регионе.')
             self.assertEqual(len(groups(config, store, now)[0]), 1)

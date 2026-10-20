@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.error import URLError
@@ -222,6 +222,9 @@ class DigestGuardTests(unittest.TestCase):
 
     def add(self, source, draft):
         self.store.add_feed('official',[Entry('official','SearchApp','https://example.com/app',(self.now-timedelta(minutes=1)).isoformat(),source)],include_existing=True)
+        with self.store.db:
+            self.store.db.execute('UPDATE items SET created_at=?',
+                                 ((self.now-timedelta(minutes=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),))
         self.store.set_state('https://example.com/app','ready',article=source,draft=draft)
 
     def test_previously_approved_wrong_attribution_is_held_without_send(self):
@@ -292,6 +295,9 @@ class DigestGuardTests(unittest.TestCase):
     def test_final_editor_waits_without_gpu_and_picks_up_late_arrival(self):
         start = self.now.replace(hour=20,minute=50)
         self.store.add_feed('official',[Entry('official','First model','one',(start-timedelta(seconds=1)).isoformat(),'News')],include_existing=True)
+        with self.store.db:
+            self.store.db.execute('UPDATE items SET created_at=?',
+                                 ((start-timedelta(seconds=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),))
         clock = [100.0]
         active = []
         from contextlib import contextmanager
@@ -309,6 +315,9 @@ class DigestGuardTests(unittest.TestCase):
             clock[0] += 300
             if clock[0] == 400:
                 self.store.add_feed('official',[Entry('official','Late model','two',(start-timedelta(seconds=1)).isoformat(),'News')],include_existing=True)
+                with self.store.db:
+                    self.store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                                         ((start-timedelta(seconds=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), 'two'))
         with patch('ainews.daily.local_now',return_value=start), \
              patch('ainews.daily.time.monotonic',side_effect=lambda:clock[0]), \
              patch('ainews.daily.time.sleep',side_effect=sleep), \
