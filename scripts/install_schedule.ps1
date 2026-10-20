@@ -35,6 +35,8 @@ function Install-AIJob($name, $mode, $triggers, [int]$limitMinutes, [bool]$catch
     $action = New-ScheduledTaskAction -Execute $pythonwExe -Argument ('"' + $runner + '" ' + $mode) -WorkingDirectory $projectRoot
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes $limitMinutes) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     $settings.StartWhenAvailable = $catchup
+    # Operator policy: no AI News task may wake the laptop automatically.
+    $settings.WakeToRun = $false
     Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force | Out-Null
     Write-Host "AI task enabled: $name ($mode)"
 }

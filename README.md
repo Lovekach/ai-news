@@ -155,13 +155,14 @@ This is eligibility, not automatic approval or an extension of freshness: the ex
 
 Telegram targets 3,900 UTF-16 units. When the complete edition cannot fit, lower-priority stories may be omitted from Telegram but remain in `output/daily/YYYY-MM-DD.json`. This private archive contains source identifiers and the exact public text. Bare product identifiers and incomplete sentences are held for review. A JSON string limited by the generation schema can be unfinished even when the JSON itself is valid: only complete preceding sentences may proceed to the existing factual verifier. Empty editions are not posted. **Telegram is the only implemented publication adapter; X is a source, not a publication destination.**
 
-The laptop must be awake and the configured Windows user logged in. Publication has no late catch-up: missing the window will not trigger a post hours later.
+The laptop must be awake and the configured Windows user logged in during evening editing and publication. **AI News intentionally does not wake the laptop:** every installed task explicitly has `WakeToRun=false`, and the application does not change Windows power policy. A sleeping, powered-off or signed-out host cannot guarantee the 21:00 edition. Publication has no late catch-up: waking the laptop later will not trigger a post hours after its window. See [the October 19 incident analysis](docs/publication-sleep-incident.md) for the confirmed sleep failure and evidence limits.
 
 ### Failure handling and resources
 
 - A unique `daily:YYYY-MM-DD` ledger entry is reserved transactionally before sending. Overlapping runs cannot reserve it twice.
 - A lost Telegram response produces `send_uncertain`; verify delivery manually before recovery. This favors avoiding duplicate posts, not automatic retry or network-level exactly-once delivery.
 - Token-read failure before the request leaves drafts available for another attempt within the publication window.
+- Started publisher runs log an explicit reason for disabled publication, missing channel configuration, an out-of-window invocation or an existing receipt. If Task Scheduler never starts Python, the application cannot log that missing invocation; use Windows power events and Scheduler history to investigate it.
 - Daytime jobs persist data without Ollama. Evening editing has a 25-minute budget; the hidden runner stops the final invocation before publication.
 - Windows Job Objects close only the editor's own model process tree, including when its parent exits.
 - Logs and SQLite data live under `.state/`; back up the publication ledger privately.
