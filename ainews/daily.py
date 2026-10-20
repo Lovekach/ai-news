@@ -1,4 +1,4 @@
-"""Calendar-day strategy built on the existing AI store, editor and publisher."""
+"""Continuous daily editions built on the existing AI store, editor and publisher."""
 from __future__ import annotations
 
 import hashlib
@@ -33,11 +33,12 @@ def local_now(now: datetime | None = None) -> datetime:
 
 def window(now: datetime) -> tuple[str, str, str]:
     current = local_now(now)
-    start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = current.replace(hour=21, minute=0, second=0, microsecond=0)
+    start = cutoff - timedelta(days=1)
     fmt = "%Y-%m-%d %H:%M:%S"
     return ("daily:" + current.date().isoformat(),
             start.astimezone(timezone.utc).strftime(fmt),
-            current.astimezone(timezone.utc).strftime(fmt))
+            min(current, cutoff).astimezone(timezone.utc).strftime(fmt))
 
 
 def publication_window(now: datetime) -> bool:
@@ -52,9 +53,24 @@ def units(text: str) -> int:
 
 def candidates(store: Store, now: datetime, states: tuple[str, ...]) -> list:
     _, start, end = window(now)
+    if not states:
+        return []
+    fresh_start = (local_now(now) - timedelta(hours=24)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     placeholders = ",".join("?" for _ in states)
-    rows = store.db.execute(f"SELECT * FROM items WHERE state IN ({placeholders})", states).fetchall()
-    return [row for row in rows if published_in_window(row["published"], start, end)]
+    rows = store.db.execute(
+        f"SELECT * FROM items WHERE state IN ({placeholders}) "
+        "AND NOT EXISTS (SELECT 1 FROM digest_items WHERE digest_items.url=items.url)", states).fetchall()
+    # Both timestamps must precede the cutoff: knowledge obtained later cannot
+    # change an older edition. Late discovery admits a source to the existing
+    # freshness/evidence checks, never to automatic publication. Fresh backlog
+    # also survives a missed edition or the editor's 20:59 stop. No historical
+    # ledger checkpoint or source date needs to be rewritten during upgrades.
+    return [row for row in rows
+            if published_in_window(row["published"], "1970-01-01 00:00:00", end)
+            and published_in_window(row["created_at"], "1970-01-01 00:00:00", end)
+            and (published_in_window(row["published"], start, end)
+                 or published_in_window(row["created_at"], start, end)
+                 or published_in_window(row["published"], fresh_start, end))]
 
 
 def priority(row) -> int:
@@ -80,6 +96,8 @@ def priority(row) -> int:
 def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[tuple[str, str]]]:
     allowed = {s["name"] for s in config["sources"] if s.get("auto_publish")}
     rows = candidates(store, now, ("ready",))
+    fresh_start = (local_now(now) - timedelta(hours=24)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    end = window(now)[2]
     result: list[list] = []
     discarded = []
     sent_facts = set()
@@ -97,6 +115,11 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
             value = datetime.fromisoformat(row["published"].replace("Z", "+00:00"))
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
     for row in sorted(rows, key=timestamp, reverse=True):
+        # A draft approved yesterday must not bypass the editor's existing
+        # daily 24-hour freshness limit just because discovery was recent.
+        if not published_in_window(row["published"], fresh_start, end):
+            discarded.append((row["url"], "Source publication outside daily freshness window"))
+            continue
         if row["source"] not in allowed or AD_TITLE.search(row["title"]):
             discarded.append((row["url"], "Not an enabled editorial source or promotional title"))
             continue
@@ -470,6 +493,9 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     output.mkdir(parents=True, exist_ok=True)
     filename = output / (current.date().isoformat() + ".json")
     document = {"date": str(current.date()), "timezone": "Europe/Moscow", "cutoff": current.isoformat(),
+                "coverage_window": {"start": window(current)[1], "end": window(current)[2],
+                                    "timezone": "UTC", "end_exclusive": True,
+                                    "late_discovery": True, "freshness_hours": 24},
                 "full_text": edition.full, "telegram_text": edition.telegram, "published_urls": edition.urls,
                 "full_edition_urls": edition.full_urls,
                 "stories": edition.stories, "selected": edition.selected,

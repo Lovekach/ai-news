@@ -90,10 +90,10 @@ class ProductionReadiness(unittest.TestCase):
 
     def test_mistral_updates_merge_without_collapsing_different_versions(self):
         self.add('early', headline='Mistral Large 4: новый релиз', what='Модель запускает агентов.')
-        self.add('late', headline='Mistral Large 4: детали релиза', what='В модели уточнены параметры.', when=self.now)
-        self.add('other', headline='Mistral Large 5: новый релиз', what='Обновлена другая версия.')
-        # Exclusive cutoff is intentional: use a moment after the last update.
         from datetime import timedelta
+        self.add('late', headline='Mistral Large 4: детали релиза', what='В модели уточнены параметры.', when=self.now-timedelta(seconds=1))
+        self.add('other', headline='Mistral Large 5: новый релиз', what='Обновлена другая версия.')
+        # The last update precedes the fixed exclusive 21:00 cutoff.
         edition = compose_daily(self.config, self.store, self.now + timedelta(seconds=1))
         self.assertEqual(edition.stories, 2)
         self.assertNotIn('Модель запускает агентов.', edition.telegram)

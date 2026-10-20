@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -334,6 +334,9 @@ class RolloutTests(unittest.TestCase):
     def add(self, url, title, what, source):
         self.store.add_feed('official', [Entry('official', title, url,
                             (self.now-timedelta(hours=1)).isoformat(), source)], include_existing=True)
+        with self.store.db:
+            self.store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                ((self.now-timedelta(hours=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), url))
         self.store.set_state(url, 'ready', article=source,
                              draft=f'🧠 {title}\n\nЧто произошло: {what}')
 

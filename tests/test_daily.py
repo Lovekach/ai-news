@@ -30,6 +30,9 @@ class DailyTests(unittest.TestCase):
             when=None, state='ready', caveat=''):
         published = (when or self.now - timedelta(hours=1)).isoformat()
         self.store.add_feed('official', [Entry('official', headline, url, published, what)], include_existing=True)
+        with self.store.db:
+            self.store.db.execute('UPDATE items SET created_at=? WHERE url=?',
+                ((when or self.now - timedelta(hours=1)).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'), url))
         draft = f'🧠 {headline}\n\nЧто произошло: {what}\n\nПростыми словами: Можно разобрать документ и найти нужные фрагменты.'
         if caveat:
             draft += '\n\nЧто важно знать: ' + caveat
@@ -61,7 +64,7 @@ class DailyTests(unittest.TestCase):
         self.add('today')
         self.store.db.execute("UPDATE items SET published='bad' WHERE url='future'")
         self.store.db.commit()
-        self.assertEqual({r['url'] for r in candidates(self.store, self.now, ('ready',))}, {'midnight', 'today'})
+        self.assertEqual({r['url'] for r in candidates(self.store, self.now, ('ready',))}, {'before', 'midnight', 'today'})
 
     def test_window_is_2056_to_2104_no_late_catchup(self):
         self.add()
