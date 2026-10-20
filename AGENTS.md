@@ -6,6 +6,7 @@
 - PremWire is an independent project. Do not change its files, configuration, schedules, processes or publications, or depend on its checkout.
 - Preserve the running AI News installation and its daily publication at 21:00 Europe/Moscow. Do not change live settings, tokens, model, task definitions or processes as part of Git publication. Such operational changes require authorization in the task itself.
 - Do not send test posts to real channels without explicit permission. Keep collected data and the publication ledger intact.
+- Do not enable automatic laptop wake-up or change Windows power/wake-timer policy. The owner explicitly prohibits waking the laptop for AI News. Preserve `WakeToRun=false`; report a sleeping/offline host as an availability limitation instead of claiming guaranteed 21:00 delivery.
 
 ## Required completion workflow
 

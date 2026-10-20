@@ -467,8 +467,14 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
     from .telegram import read_token, send_message
     current = local_now(now)
     slot, _, _ = window(current)
-    if not config.get("auto_publish") or not config.get("channel_id") or not publication_window(current) or store.digest(slot):
-        return []
+    if not config.get("auto_publish"):
+        return ["Daily Digest not started: automatic publishing is disabled"]
+    if not config.get("channel_id"):
+        return ["Daily Digest not started: channel is not configured"]
+    if not publication_window(current):
+        return [f"Daily Digest skipped: outside 20:56–21:04 MSK publication window ({current:%Y-%m-%d %H:%M:%S} MSK); no late catch-up"]
+    if receipt := store.digest(slot):
+        return [f"Daily Digest not started: {slot} already reserved ({receipt['state']}); automatic resend blocked"]
     edition = compose_daily(config, store, current)
     for url, reason in edition.discarded:
         if reason.startswith("Quality review required"):
