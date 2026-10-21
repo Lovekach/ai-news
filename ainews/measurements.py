@@ -9,6 +9,8 @@ _TOKEN = r'(?:tokens?|toks?|токен\w*)'
 _RATE = re.compile(_NUMBER + r'\s*' + _TOKEN + r'\s*(?:/\s*s\b|per second\b|в\s+секунд\w*|/\s*с\b)', re.I)
 _EFFICIENCY = re.compile(_NUMBER + r'\s*' + _TOKEN + r'\s*(?:per\s+(?:dollar|\$)|/\s*\$|(?:за|на)\s+(?:(?:один|1)\s+)?(?:доллар|\$))', re.I)
 _POINTS = re.compile(_NUMBER + r'\s*(?:points?|пункт\w*)\b', re.I)
+_PERCENT = re.compile(_NUMBER + r'\s*(?:%|percent(?:age)?\b|процент\w*)', re.I)
+_PREVIOUS = re.compile(r'previous\s+(?:version|release|model|generation)|предыдущ\w*\s+(?:верси|модел|поколен|релиз)', re.I)
 _SCALE = {'k': 1000, 'тыс': 1000, 'thousand': 1000, 'm': 1000000, 'млн': 1000000,
           'million': 1000000, 'b': 1000000000, 'млрд': 1000000000, 'billion': 1000000000}
 _COUNT_WORDS = dict(zip('one two three four five six seven eight nine ten eleven twelve'.split(),range(1,13)))
@@ -131,6 +133,15 @@ def bindings(text: str, *, subject: str = '', source: str = '') -> list[dict]:
                     result.append({**row, 'value': str(left.normalize()), 'comparison_position': 'left'})
                     row['comparison_position'] = 'right'
                 result.append(row)
+    # Keep comparison targets bound to the SAME percentage-bearing clause.
+    # A comparison in another quoted benchmark is not evidence for this one.
+    for sentence in re.split(r'(?<=[.!?])\s+|[;\n]+', text):
+        for match in _PERCENT.finditer(sentence):
+            points = bool(re.match(r'\s*(?:points?\b|пункт)', sentence[match.end():], re.I))
+            result.append({'metric': 'percentage',
+                'value': str((_decimal(match['number'], sentence) * _scale(match['scale'])).normalize()),
+                'unit': 'pp' if points else '%', 'scope': '', 'conditions': {}, 'object': subject, 'source': source,
+                'comparison': 'previous_version' if _PREVIOUS.search(sentence) else '', 'quote': sentence})
     return result
 
 
@@ -140,13 +151,24 @@ def measurement_issues(source: str, draft: str) -> list[str]:
     for claim in claimed:
         same_unit = [s for s in observed if s['unit'] == claim['unit']]
         if not same_unit:
+            if claim['unit'] in {'%', 'pp'} and any(s['unit'] in {'%', 'pp'} and s['value'] == claim['value'] for s in observed):
+                issues.append('Percentage and percentage points are not interchangeable: ' + claim['value'])
             continue  # The existing numeric and semantic verifier handles unknown units.
         matches = [s for s in same_unit if s['value'] == claim['value']]
+        if claim['unit'] in {'%', 'pp'} and not matches:
+            precision = len(claim['value'].split('.')[1]) if '.' in claim['value'] else 0
+            tolerance = Decimal(5) * (Decimal(10) ** (-precision-1))
+            matches = [s for s in same_unit if abs(Decimal(s['value'])-Decimal(claim['value'])) <= tolerance]
         if not matches:
             if claim['metric']=='entity_count':
                 continue  # Ambiguous noun adjacency is not proof of a count; verify semantically.
             issues.append('Measurement value or magnitude differs from source: ' + claim['value'] + ' ' + claim['unit']
                           + '; source values: ' + ', '.join(s['value'] for s in same_unit))
+            continue
+        if (claim.get('comparison') == 'previous_version'
+                and not any(s.get('comparison') == 'previous_version' for s in matches)):
+            issues.append('Percentage has no source-bound previous-version comparison: ' + claim['value']
+                          + '%. A metric value or plus sign is not evidence of improvement over a previous release.')
             continue
         compatible = [s for s in matches if (s['metric'] == claim['metric'] or
                       'unspecified_rate' in {s['metric'], claim['metric']})
