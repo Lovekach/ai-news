@@ -44,6 +44,12 @@ _SOURCE_PREFIX = re.compile(
     r'(?:[ \t]*[*_`]*[ \t]*:[ \t]*[*_`]*[ \t]*|[ \t]*[*_`]*[ \t]*$)')
 
 
+def _code_label(value: str) -> bool:
+    # C++ source-style library names are not web hosts. Keep their spelling,
+    # while still breaking any Telegram auto-linking. Paths/schemes never qualify.
+    return bool(re.fullmatch(r'[\w-]+\.[ch]pp', value, re.I))
+
+
 def _close(text: str, start: int, opening: str, closing: str) -> int:
     depth = 0
     for index in range(start, len(text)):
@@ -63,7 +69,7 @@ def _display_label(label: str) -> str:
     # Break Telegram auto-linking without changing its visible spelling.
     return _URL.sub(lambda match: match[0].replace('.', '\u2060.')
                     if not any(char in match[0] for char in ':/@?#')
-                    and any(char.isupper() or char.isdigit() for char in match[0].split('.')[0])
+                    and (any(char.isupper() or char.isdigit() for char in match[0].split('.')[0]) or _code_label(match[0]))
                     else '', label)
 
 
@@ -116,7 +122,7 @@ def public_text(text: str) -> str:
     # Keep explicit company/product display names such as Z.ai. A word joiner
     # makes the displayed name non-clickable; never retain a URL's path/query.
     text = re.sub(r'(?<![\w/])' + _HOST + r'\b(?![\w./?#])', lambda m: m[0].replace('.', '\u2060.')
-                  if any(c.isupper() for c in m[0]) else m[0], text, flags=re.I)
+                  if any(c.isupper() for c in m[0]) or _code_label(m[0]) else m[0], text, flags=re.I)
     def remove(match):
         value = match[0]
         suffix = ''

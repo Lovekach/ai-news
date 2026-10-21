@@ -173,6 +173,7 @@ class IntegrityTests(unittest.TestCase):
                 draft={'relevant':True,'confidence':'high','headline':'Aster получила обновление',
                        'what_happened':'Вышло стабильное обновление для локальных инструментов.','evidence':'Aster released a stable update for local tools.'}
                 with patch('ainews.pipeline.article_details',return_value=(source,None)), \
+                     patch('ainews.pipeline.github_repo_release_date',side_effect=ValueError('No primary release date captured')), \
                      patch('ainews.pipeline.generate_draft',return_value=draft) as writer, \
                      patch('ainews.pipeline.polish_draft',side_effect=lambda config,title,source,data:data), patch('ainews.pipeline.verify_draft'):
                     prepare(config,store,limit=1)
