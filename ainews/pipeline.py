@@ -405,6 +405,11 @@ def polish_draft(config: dict[str, Any], title: str, text: str, draft: dict[str,
     if not all(isinstance(polished.get(key), str) for key in fields):
         return draft
     result = {**draft, **{key: polished[key] for key in fields}}
+    # A style pass has no new evidence for a different headline. Preserve a
+    # complete writer title instead of letting schema saturation clip a word.
+    if (headline_issues(result['headline'])
+            and not headline_issues(str(draft.get('headline', '')))):
+        result['headline'] = draft['headline']
     if protected_main:
         result['what_happened'] = draft['what_happened']
     result['caveat'] = draft.get('caveat', '')
@@ -620,6 +625,10 @@ def verify_draft(config: dict[str, Any], title: str, source_text: str, draft: st
               "При unsupported или uncertain назови конкретную ошибку, а не подтверждённые факты; не требуй несвязанные детали. "
               "Различай метрику, значение, единицу, объект, источник и условия: output/input/cached tokens, совокупный throughput, "
               "скорость пользователя, tokens/$ TCO, цену API и предпочтения пользователей. Наличие числа не доказывает смысл метрики. "
+              "Для процента проверь, является ли он значением именованной метрики или изменением во времени. "
+              "Слова improvement и знак плюс сами по себе не доказывают сравнение с предыдущей версией. "
+              "Если цитата даёт числовую метрику без базы сравнения, не подтверждай добавленную базу, даже если рядом есть другой бенчмарк. "
+              "Проверяй причинность: результат конкретного исправления нельзя приписывать соседней технологии; ограничения лицензии обязательны при описании открытых весов. "
               "Не называй старый учебный материал новым выпуском без даты первоначальной публикации. Ответь JSON checks.")
     documents, indexed = verification_sources(config, source_text)
     claims = verification_claims(draft)

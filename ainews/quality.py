@@ -35,6 +35,10 @@ def trim_incomplete_tail(text: str) -> tuple[str, str]:
 def headline_issues(headline: str) -> list[str]:
     if len(re.findall(r'[^\W_][\w.-]*', headline)) < 2 or not complete_sentence(headline+'.'):
         return ['Headline lacks an informative event description']
+    if len(headline) >= 100:
+        return ['Headline reaches the generation schema limit; rewrite a shorter complete title']
+    if re.search(r'\b(?:в|на|от|для|с|до|и|из|к|по|при|без)$', headline, re.I):
+        return ['Headline ends with an unfinished phrase']
     return []
 
 
@@ -530,6 +534,10 @@ def measurement_issues(source: str, draft: str) -> list[str]:
 
 def check_semantic_claims(source: str, draft: str) -> None:
     s, d = source.casefold(), draft.casefold()
+    if (re.search(r'non.commercial\s+licen|лицензи\w*[^.]{0,35}некоммерческ', s)
+            and re.search(r'вес\w*|открыт\w*\s+модел', d)
+            and not re.search(r'некоммерческ|коммерческ\w*[^.]{0,65}(?:соглашени|разрешени|лицензи)|non.commercial', d)):
+        raise ValueError('Open weights omit the source non-commercial license restriction')
     if re.search(r'исходн\w*\s+код\w*\s+вес\w*', d):
         raise ValueError('Model weights are parameters, not source code; keep weights and software code distinct')
     if (re.search(r'независим\w*\s+(?:тест|замер|измерен|оценк)', d)

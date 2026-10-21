@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,6 +18,7 @@ from .quality import event_signature, draft_issues, source_window, integrity_iss
 from .presentation import public_text, assert_public_text
 from .store import Store
 from .security import safe_error
+from .events import identity, same_event
 
 # Moscow has UTC+3 throughout the year. Explicit offset also works on Windows
 # installations without an IANA tzdata package; never use the laptop's timezone.
@@ -98,6 +99,8 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
     rows = candidates(store, now, ("ready",))
     fresh_start = (local_now(now) - timedelta(hours=24)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     end = window(now)[2]
+    dates = {r['url']: r['event_date'] for r in store.db.execute('SELECT url,event_date FROM source_dates')}
+    events = {r['url']: identity(r, event_date=dates.get(r['url']) or '') for r in rows}
     result: list[list] = []
     discarded = []
     sent_facts = set()
@@ -135,13 +138,13 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
         if canonical_title(fields["what"]) in sent_facts:
             discarded.append((row["url"], "Already published facts; no new development"))
             continue
-        signature = event_signature(row["title"], row["summary"]) or event_signature(fields["headline"], fields["what"])
+        event = events[row['url']]
         for group in result:
             latest = parse_draft(group[0]["draft"])
-            other_signature = event_signature(group[0]["title"], group[0]["summary"]) or event_signature(latest["headline"], latest["what"])
-            # Never collapse different explicit model versions or event types.
-            if ((signature is not None and signature == other_signature) or
-                (signature is None and other_signature is None
+            # Match the entire provenance-connected group, not just its first
+            # report. A model's different named integrations remain distinct.
+            if (any(same_event(event, events[r['url']]) for r in group) or
+                (event is None and events[group[0]['url']] is None
                  and (linked_announcement(row, group[0]) or
                       (duplicate_story(fields["headline"], [latest["headline"]])
                        and duplicate_title(row["summary"], [group[0]["summary"]]))))):
@@ -172,7 +175,7 @@ def linked_announcement(left, right) -> bool:
 
 
 def fingerprint(group: list) -> str:
-    content = ["quality-v5", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
+    content = ["quality-v6", [(r["url"], r["published"], r["draft"], r["article"]) for r in group]]
     return hashlib.sha256(json.dumps(content, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -185,6 +188,9 @@ def merge_stories(config: dict, store: Store, now: datetime) -> list[str]:
         key = fingerprint(group)
         if store.db.execute("SELECT 1 FROM daily_story_drafts WHERE fingerprint=?", (key,)).fetchone():
             continue
+        store.record_editorial(group[0]['url'], 'event_group', {
+            'members': [r['url'] for r in group], 'identity': repr(identity(group[0])),
+            'reason': 'source-bound identity or matching announcement', 'fingerprint': key})
         if len({r["draft"] for r in group}) == 1:
             continue
         # Latest evidence is first and cannot be truncated away. Keep the entire
@@ -293,6 +299,33 @@ class Edition:
     stories: int
     selected: int
     full_urls: list[str]
+    public_cards: list = field(default_factory=list)
+    event_dates: dict = field(default_factory=dict)
+
+
+def final_public_issues(text: str, selected: list, limit: int, *, event_dates: dict | None = None) -> list[str]:
+    """Audit the exact payload against its selected provenance, without an LLM.
+
+    This is intentionally a refusal gate, not an alternate editor. Unknown
+    event identities are not proof of duplication or of semantic correctness.
+    """
+    issues = []
+    try:
+        assert_public_text(text, limit)
+    except ValueError as exc:
+        issues.append(str(exc))
+    if text != NEWS_SEPARATOR.join(item for item, _ in selected):
+        issues.append('Final payload differs from audited cards')
+    seen = []
+    for number, (item, group) in enumerate(selected, 1):
+        source = '\n'.join(row['article'] or row['summary'] for row in group)
+        issues.extend(f'Card {number}: {issue}' for issue in draft_issues(source, item))
+        events = [identity(row, event_date=(event_dates or {}).get(row['url']) or '') for row in group]
+        for previous, earlier in seen:
+            if any(same_event(left, right) for left in events for right in earlier):
+                issues.append(f'Cards {previous} and {number} repeat the same source-bound event')
+        seen.append((number, events))
+    return list(dict.fromkeys(issues))
 
 
 def primary_links(config: dict, group: list) -> list[str]:
@@ -419,7 +452,8 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
         assert_public_text(telegram, limit)
     urls = [row["url"] for _, group in chosen for row in group]
     return Edition(full, telegram, urls, discarded, len(cards), len(chosen),
-                   [row['url'] for _, group, _ in cards for row in group])
+                   [row['url'] for _, group, _ in cards for row in group], chosen,
+                   {r['url']: r['event_date'] for r in store.db.execute('SELECT url,event_date FROM source_dates')})
 
 
 def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | None = None) -> list[str]:
@@ -490,9 +524,12 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         return report + ["No verified news: no empty post published"]
     # Final preflight occurs before reservation/network: the ledger, archive
     # and exact API payload must describe the same link-free, complete text.
-    assert_public_text(edition.telegram, min(3900, int(config.get('max_digest_chars', 3900))))
-    if any(integrity_issues(item) for item in edition.telegram.split(NEWS_SEPARATOR)):
-        return report + ['Public quality gate failed; no reservation or Telegram call']
+    findings = final_public_issues(edition.telegram, edition.public_cards,
+                                  min(3900, int(config.get('max_digest_chars', 3900))), event_dates=edition.event_dates)
+    if findings:
+        for url in edition.urls:
+            store.record_editorial(url, 'final_payload_gate', {'findings': findings})
+        return report + ['Public quality gate failed; no reservation or Telegram call', *findings]
     # Archive before any external send. It is reusable for platforms accepting
     # long text. Only Telegram is a connected publication adapter in this app.
     output = root / "output" / "daily"

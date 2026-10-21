@@ -106,6 +106,20 @@ class DailyTests(unittest.TestCase):
     def test_empty_does_not_send_or_reserve(self):
         self.publish()
         self.sender.assert_not_called()
+
+    def test_final_payload_mutation_is_rejected_before_token_archive_and_reservation(self):
+        self.add()
+        edition = compose_daily(self.config, self.store, self.now)
+        edition.telegram += '\n\nНепроверенное дополнение.'
+        token = Mock(return_value='mock-only')
+        with patch('ainews.daily.compose_daily', return_value=edition):
+            report = publish_daily(self.config, self.store, self.root, now=self.now,
+                                   token_reader=token, sender=self.sender)
+        self.assertTrue(any('Final payload differs' in line for line in report))
+        token.assert_not_called()
+        self.sender.assert_not_called()
+        self.assertIsNone(self.store.digest('daily:2026-10-12'))
+        self.assertFalse((self.root / 'output').exists())
         self.assertIsNone(self.store.digest('daily:2026-10-12'))
 
     def test_uncertain_delivery_blocks_repeat_and_keeps_ledger(self):
