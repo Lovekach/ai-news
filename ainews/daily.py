@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -293,6 +293,29 @@ class Edition:
     stories: int
     selected: int
     full_urls: list[str]
+    public_cards: list = field(default_factory=list)
+
+
+def final_public_issues(text: str, selected: list, limit: int) -> list[str]:
+    """Check the exact transport payload, with card-local provenance intact."""
+    issues = []
+    try:
+        assert_public_text(text, limit)
+    except ValueError as exc:
+        issues.append(str(exc))
+    if text != NEWS_SEPARATOR.join(item for item, _ in selected):
+        issues.append('Final payload differs from audited cards')
+    seen_urls, seen_facts = set(), set()
+    for index, (item, group) in enumerate(selected, 1):
+        source = '\n'.join(row['article'] or row['summary'] for row in group)
+        issues.extend(f'Card {index}: {issue}' for issue in draft_issues(source, item))
+        urls = {row['url'] for row in group}
+        facts = canonical_title(item)
+        if seen_urls & urls or facts in seen_facts:
+            issues.append('Final payload repeats an already selected story')
+        seen_urls.update(urls)
+        seen_facts.add(facts)
+    return list(dict.fromkeys(issues))
 
 
 def primary_links(config: dict, group: list) -> list[str]:
@@ -391,7 +414,11 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
     for group in story_groups:
         cached = store.db.execute("SELECT draft FROM daily_story_drafts WHERE fingerprint=?",
                                   (fingerprint(group),)).fetchone()
-        fields = parse_draft(cached[0] if cached else group[0]["draft"])
+        try:
+            fields = parse_draft(cached[0] if cached else group[0]["draft"])
+        except ValueError:
+            discarded.extend((r['url'], 'Quality review required: Invalid merged draft') for r in group)
+            continue
         original = "\n".join(r["article"] or r["summary"] for r in group)
         issues = draft_issues(original, card(fields, detail_first=True), headline=fields["headline"])
         if issues:
@@ -419,7 +446,7 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
         assert_public_text(telegram, limit)
     urls = [row["url"] for _, group in chosen for row in group]
     return Edition(full, telegram, urls, discarded, len(cards), len(chosen),
-                   [row['url'] for _, group, _ in cards for row in group])
+                   [row['url'] for _, group, _ in cards for row in group], chosen)
 
 
 def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | None = None) -> list[str]:
@@ -490,9 +517,12 @@ def publish_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         return report + ["No verified news: no empty post published"]
     # Final preflight occurs before reservation/network: the ledger, archive
     # and exact API payload must describe the same link-free, complete text.
-    assert_public_text(edition.telegram, min(3900, int(config.get('max_digest_chars', 3900))))
-    if any(integrity_issues(item) for item in edition.telegram.split(NEWS_SEPARATOR)):
-        return report + ['Public quality gate failed; no reservation or Telegram call']
+    findings = final_public_issues(edition.telegram, edition.public_cards,
+                                  min(3900, int(config.get('max_digest_chars', 3900))))
+    if findings:
+        for url in edition.urls:
+            store.record_editorial(url, 'final_payload_gate', {'findings': findings})
+        return report + ['Public quality gate failed; no reservation or Telegram call', *findings]
     # Archive before any external send. It is reusable for platforms accepting
     # long text. Only Telegram is a connected publication adapter in this app.
     output = root / "output" / "daily"

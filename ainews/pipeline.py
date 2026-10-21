@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .feeds import Entry, article_details, article_text, download, download_feed, parse_feed
 from .store import Store
@@ -203,15 +203,16 @@ def original_is_other_moscow_day(value: str, entry_date: str) -> bool:
 
 
 def github_repo_release_date(url: str, post_date: str) -> str:
-    """Date a repo-only TG link by releases that existed when it was posted.
+    """Date a repository/tag link by releases that existed when it was posted.
 
     A release published later cannot retroactively make an earlier repost new.
     README modification or repository push time is not a release date.
     """
     parsed = urlparse(url)
     parts = parsed.path.strip('/').split('/')
-    if parsed.hostname != 'github.com' or len(parts) != 2 or not all(
-            re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts):
+    tagged = len(parts) == 5 and parts[2:4] == ['releases', 'tag']
+    if parsed.hostname != 'github.com' or (len(parts) != 2 and not tagged) or not all(
+            re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts[:2]):
         raise ValueError('Not a GitHub repository URL')
     try:
         cutoff = parsedate_to_datetime(post_date)
@@ -219,9 +220,13 @@ def github_repo_release_date(url: str, post_date: str) -> str:
         cutoff = datetime.fromisoformat(post_date.replace('Z', '+00:00'))
     if cutoff.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=timezone.utc)
-    raw, _ = download(f'https://api.github.com/repos/{parts[0]}/{parts[1]}/releases?per_page=5',
+    endpoint = ('/releases/tags/' + quote(unquote(parts[4]), safe='') if tagged else '/releases?per_page=5')
+    raw, _ = download(f'https://api.github.com/repos/{parts[0]}/{parts[1]}' + endpoint,
                       allowed_hosts=['api.github.com'], max_bytes=500_000)
-    releases = json.loads(raw)
+    payload = json.loads(raw)
+    if tagged and (not isinstance(payload, dict) or payload.get('tag_name') != unquote(parts[4])):
+        raise ValueError('GitHub release tag does not match the requested version')
+    releases = [payload] if tagged else payload
     if not isinstance(releases, list):
         raise ValueError('Invalid GitHub release metadata')
     dated = []
@@ -326,6 +331,7 @@ def generate_draft(config: dict[str, Any], title: str, text: str, *, official_br
         "В релизе модели прежде всего сохраняй размер, активные параметры, контекст и режим работы, если указаны; "
         "они важнее общего объяснения MoE или обещаний пользы. Число экспертов на блок не означает число во всей модели. "
         "Сообщение о расширении доступности не называй выпуском новой модели. "
+        "Улучшение возможностей существующих моделей тоже не означает выпуск новой модели или версии. "
         "Не объединяй разные события в одной новости. "
         "Сначала скопируй в поле evidence точный фрагмент исходного текста длиной от 25 до 500 символов, "
         "который доказывает главный факт. При отсутствии такого фрагмента поставь relevant=false. "
@@ -333,7 +339,8 @@ def generate_draft(config: dict[str, Any], title: str, text: str, *, official_br
         "Если в источнике нет существенного и понятного изменения, relevant=false. "
         "В headline дай конкретный заголовок до 80 символов без кликбейта и слов «революция», «прорыв», «официально», если это не подтверждено. "
         "В what_happened расскажи, что изменилось, с конкретными подтверждёнными деталями несколькими короткими предложениями, до 1200 символов. "
-        "В simple_explanation поясни только технический термин или неочевидный механизм, если он действительно нужен новичку, до 700 символов; "
+        "В simple_explanation поясни только технический термин или механизм, прямо описанный в источнике, до 700 символов; "
+        "не вводи объяснения из общих знаний и не достраивай цепочку от промежуточного результата до конечного эффекта. "
         "не повторяй содержание what_happened. Если пояснение не нужно, оставь поле пустым. "
         "В why_it_matters назови только практические следствия, прямо следующие из источника, до 500 символов; "
         "если их нет, оставь поле пустым. "
@@ -408,6 +415,8 @@ def polish_draft(config: dict[str, Any], title: str, text: str, draft: dict[str,
     if protected_main:
         result['what_happened'] = draft['what_happened']
     result['caveat'] = draft.get('caveat', '')
+    if headline_issues(result['headline']) and not headline_issues(str(draft.get('headline', ''))):
+        result['headline'] = draft['headline']
     if re.search(r"general.purpose agents", text, re.I):
         # Correct this observed translation calque before the unchanged fact
         # checker. Conditional on the original wording, not a global rewrite.
@@ -456,6 +465,11 @@ def revise_draft(
             check_semantic_claims(text, value)
         except ValueError:
             affected.add(field)
+    quantitative_problem = bool(re.search(r'numbers absent|measurement|percentage|benchmark|comparison|throughput|числ|процент|замер', problem, re.I))
+    if quantitative_problem:
+        # Aggregate diagnostics do not identify a single safe field. In
+        # particular, do not restore the bad numbers after the model fixes them.
+        affected.update(fields)
     if affected:
         for field in fields:
             if field not in affected:
@@ -464,6 +478,8 @@ def revise_draft(
     # different claim. This is a candidate, not approval: the full factual
     # verifier still checks the restored text, relationships and attribution.
     for sentence in sentences(str(previous.get('what_happened', ''))):
+        if quantitative_problem:
+            break
         numbers = numeric_values(sentence)
         if not numbers or sentence in problem or numbers.issubset(numeric_values(str(revised.get('what_happened', '')))):
             continue
@@ -474,6 +490,46 @@ def revise_draft(
         if numbers.issubset(numeric_values(text)):
             revised['what_happened'] = str(revised.get('what_happened', '')).rstrip() + ' ' + sentence
     return revised
+
+
+def optional_claim_repair(previous: dict, source: str, title: str) -> tuple[dict, str] | None:
+    """Drop locally disproved optional sentences, never approve a news item.
+
+    Main facts, title and caveats are immutable here. Restrictions in an
+    explanatory field are equally protected. The caller MUST verify the exact
+    repaired text; numeric occurrence is not a factual approval.
+    """
+    from .quality import sentences
+    repaired = dict(previous)
+    changed = False
+    for field in ('simple_explanation', 'why_it_matters'):
+        kept = []
+        for sentence in sentences(str(previous.get(field, ''))):
+            invalid = bool(numeric_values(sentence) - numeric_values(source)
+                           - {numeric_key(n) for n in derived_numbers(source, sentence)})
+            try:
+                check_semantic_claims(source, sentence)
+            except ValueError:
+                invalid = True
+            if invalid and not protected_condition(sentence):
+                changed = True
+            else:
+                kept.append(sentence)
+        repaired[field] = ' '.join(kept)
+    if not changed:
+        return None
+    try:
+        return repaired, draft_text(repaired, source, source_title=title)
+    except ValueError:
+        return None
+
+
+def protected_condition(sentence: str) -> bool:
+    return bool(re.search(
+        r'\b(?:только|огранич\w*|при\s+условии|не\s+для|кроме|лицензи\w*|'
+        r'коммерческ\w*|некоммерческ\w*|подписчик\w*|параллел\w*|'
+        r'суммарн\w*|не\s+(?:подтвержд\w*|доказан\w*|проверен\w*|установлен\w*)|'
+        r'batch|GPU|BF16|FP\d+|INT\d+|only|unless|license)\b', sentence, re.I))
 
 
 def align_evidence(draft: dict[str, Any], source_text: str) -> dict[str, Any]:
@@ -577,8 +633,7 @@ def verified_subset(previous: dict, text: str, failure: VerificationFailure, sou
     if any(value in bad for value in protected):
         return None
     optional = [s for key in ('simple', 'why') for s in sentences(fields.get(key, ''))]
-    if not bad or not bad.issubset(set(optional)) or any(
-            re.search(r'\b(?:только|огранич\w*|при\s+условии|не\s+для|кроме|only|unless)\b', s, re.I) for s in bad):
+    if not bad or not bad.issubset(set(optional)) or any(protected_condition(s) for s in bad):
         return None
     repaired = {**previous, 'headline': fields['headline'], 'what_happened': fields['what'],
                 'caveat': fields.get('caveat', '')}
@@ -620,6 +675,11 @@ def verify_draft(config: dict[str, Any], title: str, source_text: str, draft: st
               "При unsupported или uncertain назови конкретную ошибку, а не подтверждённые факты; не требуй несвязанные детали. "
               "Различай метрику, значение, единицу, объект, источник и условия: output/input/cached tokens, совокупный throughput, "
               "скорость пользователя, tokens/$ TCO, цену API и предпочтения пользователей. Наличие числа не доказывает смысл метрики. "
+              "Проверяй именно причинный переход: автоматическая обработка данных не доказывает автоматический выбор действий. "
+              "Промежуточный экспериментальный результат не доказывает конечный эффект или применение вне эксперимента. "
+              "Общие знания и правдоподобные пояснения без фрагмента источника — unsupported. "
+              "Новая возможность существующей модели не доказывает выпуск новой модели. "
+              "Не объединяй область одного рейтинга с другим; условия бесплатного периода и лицензии должны сохраняться. "
               "Не называй старый учебный материал новым выпуском без даты первоначальной публикации. Ответь JSON checks.")
     documents, indexed = verification_sources(config, source_text)
     claims = verification_claims(draft)
@@ -857,7 +917,11 @@ def draft_text(draft: dict[str, Any], source_text: str, *, source_title: str = "
         raise ValueError("Draft contains numbers absent from source")
     if re.search(r"https?://|t\.me/|@[a-z0-9_]{4,}", output, flags=re.I):
         raise ValueError("Draft contains a link or handle")
-    if re.search(r"\b(?:preview|beta|early access|предварительн|бета|тестов)\w*\b", source_title, re.I):
+    # The source title may contain an entire social post. A competitor's
+    # "Preview" in a comparison does not make the subject a preview release.
+    subject_title = re.split(r'\b(?:vs\.?|versus|compared\s+(?:with|to)|level\s+with|ahead\s+of)\b|'
+                             r'по\s+сравнению\s+с|наравне\s+с|опередив', source_title, maxsplit=1, flags=re.I)[0]
+    if re.search(r"\b(?:preview|beta|early access|предварительн|бета|тестов)\w*\b", subject_title, re.I):
         if not re.search(r"\b(?:предварительн|бета|тестов|ранн\w* доступ|preview|beta)\w*\b", output, re.I):
             raise ValueError("Draft hides the preliminary status of the source")
     lower_output = output.casefold()
@@ -870,7 +934,8 @@ def draft_text(draft: dict[str, Any], source_text: str, *, source_title: str = "
     if re.search(r"без\s+(?:подключения\s+к\s+)?облак\w*", lower_output):
         if not re.search(r"\boffline\b|\bon.device\b|\blocal\b|локальн\w*|без\s+облак", lower_evidence):
             raise ValueError("Draft claims offline use without evidence")
-    if "автоматическ" in lower_output and "запуска" in lower_output:
+    if re.search(r'автоматическ\w*\s+(?:\w+\s+){0,2}запуска\w*|'
+                 r'запуска\w*\s+(?:\w+\s+){0,2}автоматическ\w*', lower_output):
         if not re.search(r"automatically\s+(?:start|launch)|auto.start|автоматическ\w*\s+запуска", lower_evidence):
             raise ValueError("Draft claims automatic launch without evidence")
     if re.search(r"\bжест\w*\b", lower_output) and not re.search(r"\bgestur\w*\b|\bжест\w*\b", lower_evidence):
@@ -1072,6 +1137,19 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                     continue
             if "/releases/tag/" in url:
                 article = re.split(r"(?i)\bFull Changelog\s*:", article, maxsplit=1)[0].strip()
+                if ((urlparse(url).hostname or '').lower() == 'github.com'
+                        and not original_date and not explicit_event_date(article)):
+                    verified_release_date = github_repo_release_date(url, row['published'])
+                    store.record_source_dates(url, event_date=verified_release_date)
+                    store.record_editorial(url, 'source_date_verification', {
+                        'kind': 'github_tag_release', 'released_at': verified_release_date,
+                        'as_of_source_post': row['published']})
+                    if (original_article_is_old(verified_release_date, minutes=freshness_minutes)
+                            or (config.get('publication_mode') == 'daily'
+                                and original_is_other_moscow_day(verified_release_date, row['published']))):
+                        store.set_state(url, 'skipped', article=article, error='Verified release predates source freshness window')
+                        report.append(f'SKIP old verified release: {title}')
+                        continue
             store.record_source_dates(url, original_published=original_date,
                                       event_date=verified_release_date or explicit_event_date(
                                           row['summary'] if source.get('type') == 'x' and source.get('primary_account') else article))
@@ -1083,7 +1161,7 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
             if config.get("publication_mode") == "daily" and dated_recap(row["summary"]):
                 raise ValueError("Retrospective announcement needs event-date verification, not today's discovery date")
             dates = store.db.execute("SELECT * FROM source_dates WHERE url=?", (url,)).fetchone()
-            if dates and dates["date_kind"] == "updated" and not original_date and not release_date:
+            if dates and dates["date_kind"] == "updated" and not original_date and not release_date and not verified_release_date:
                 raise ValueError("Update timestamp is not evidence of original publication date")
             settings = {**config, "_source_url": evidence_url or url,
                         "_source_author": source.get("handle"), "_source_published": row["published"],
@@ -1143,13 +1221,23 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                     verify_draft(settings, title, article, text, evidence=str(draft.get("evidence", "")))
                 except ValueError as exc:
                     subset = (verified_subset(draft, text, exc, evidence_text, title)
-                              if isinstance(exc, VerificationFailure) else None)
+                              if isinstance(exc, VerificationFailure) else
+                              optional_claim_repair(draft, evidence_text, title)
+                              if not isinstance(exc, VerificationProtocolError) else None)
                     if subset:
                         draft, text = subset
-                        store.record_editorial(url, 'verified_subset', {'text': text, 'reason': str(exc)})
-                        store.set_state(url, 'ready', article=article, draft=text)
-                        report.append(f'READY verified subset: {title}')
-                        break
+                        store.record_editorial(url, 'subset_candidate', {'text': text, 'reason': str(exc)})
+                        try:
+                            # Deletion can change meaning or remove a needed
+                            # qualifier. Recheck ALL retained claims in context.
+                            verify_draft(settings, title, article, text, evidence=str(draft.get('evidence', '')))
+                        except ValueError as recheck:
+                            exc = recheck
+                        else:
+                            store.record_editorial(url, 'verified_subset', {'text': text})
+                            store.set_state(url, 'ready', article=article, draft=text)
+                            report.append(f'READY verified subset: {title}')
+                            break
                     if attempt < 2 and draft.get("relevant") is True and not isinstance(exc, VerificationProtocolError):
                         store.record_editorial(url, "revision", {"problem": str(exc)})
                         revised = revise_draft(settings, title, article, draft, str(exc))

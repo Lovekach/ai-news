@@ -385,12 +385,21 @@ class RepairIntegration(unittest.TestCase):
         row,checks,revisions=self.run_preparation(VerificationProtocolError('Missing ids'),lambda *args:self.fail('Unexpected rewrite'))
         self.assertEqual((row['state'],checks,revisions),('needs_review',1,0))
 
-    def test_verified_optional_subset_is_published_without_a_second_model_call(self):
+    def test_verified_optional_subset_rechecks_exact_remaining_text(self):
         def verifier(config,title,source,text,**kwargs):
-            raise self.failure(text,lambda s:'профессиям' in s)
+            if 'профессиям' in text:
+                raise self.failure(text,lambda s:'профессиям' in s)
         row,checks,revisions=self.run_preparation(verifier,lambda *args:self.fail('Unexpected rewrite'))
-        self.assertEqual((row['state'],checks,revisions),('ready',1,0))
+        self.assertEqual((row['state'],checks,revisions),('ready',2,0))
         self.assertIn('7 млрд',row['draft']);self.assertNotIn('профессиям',row['draft'])
+
+    def test_failed_subset_recheck_does_not_approve_a_card(self):
+        def verifier(config,title,source,text,**kwargs):
+            if 'профессиям' in text:
+                raise self.failure(text,lambda s:'профессиям' in s)
+            raise VerificationProtocolError('Missing ids on repaired text')
+        row,checks,revisions=self.run_preparation(verifier,lambda *args:self.fail('Unexpected rewrite'))
+        self.assertEqual((row['state'],checks,revisions),('needs_review',2,0))
 
     def test_secondary_headline_cannot_supply_missing_primary_numbers(self):
         with tempfile.TemporaryDirectory() as temp,closing(Store(Path(temp)/'test.db')) as store:

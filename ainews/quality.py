@@ -35,6 +35,10 @@ def trim_incomplete_tail(text: str) -> tuple[str, str]:
 def headline_issues(headline: str) -> list[str]:
     if len(re.findall(r'[^\W_][\w.-]*', headline)) < 2 or not complete_sentence(headline+'.'):
         return ['Headline lacks an informative event description']
+    if len(headline) >= 100:
+        return ['Headline reaches the generation schema limit; rewrite a shorter complete title']
+    if re.search(r'\b(?:в|на|от|для|с|до|и|из|к|по|при|без)$', headline, re.I):
+        return ['Headline ends with an unfinished phrase']
     return []
 
 
@@ -255,6 +259,9 @@ def comparison_attributed(source: str, draft: str) -> bool:
     # Naming the evaluator's index is also attribution, without forcing a
     # repetitive 'the author states' preface. Extract the name from evidence.
     owners = re.findall(r"\b((?:[A-Z][A-Za-z]+\s+){1,3}?)(?:Decision Index|Cyber Index|Index|Benchmark)\b", source)
+    # Named evaluation arenas are sources too. This does not approve their
+    # result or ranking scope; the structured verifier still checks each claim.
+    owners += re.findall(r'\b((?:[A-Z][A-Za-z]+\s+){1,4}?)(?:Controlled Voice|Provider Voice|TTS Arena)\b', source)
     return bool(re.search(r"индекс|тест|бенчмарк|рейтинг", draft, re.I)
                 and any(owner.strip().casefold() in draft.casefold() for owner in owners))
 
@@ -530,6 +537,10 @@ def measurement_issues(source: str, draft: str) -> list[str]:
 
 def check_semantic_claims(source: str, draft: str) -> None:
     s, d = source.casefold(), draft.casefold()
+    if (re.search(r'non.commercial\s+licen|лицензи\w*[^.]{0,35}некоммерческ', s)
+            and re.search(r'вес\w*|открыт\w*\s+модел', d)
+            and not re.search(r'некоммерческ|коммерческ\w*[^.]{0,65}(?:соглашени|разрешени|лицензи)|non.commercial', d)):
+        raise ValueError('Open weights omit the source non-commercial license restriction')
     if re.search(r'исходн\w*\s+код\w*\s+вес\w*', d):
         raise ValueError('Model weights are parameters, not source code; keep weights and software code distinct')
     if (re.search(r'независим\w*\s+(?:тест|замер|измерен|оценк)', d)
