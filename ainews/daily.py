@@ -18,6 +18,7 @@ from .quality import event_signature, draft_issues, source_window, integrity_iss
 from .presentation import public_text, assert_public_text
 from .store import Store
 from .security import safe_error
+from .editorial import decision as editorial_decision, event_key, queue as editorial_queue
 
 # Moscow has UTC+3 throughout the year. Explicit offset also works on Windows
 # installations without an IANA tzdata package; never use the laptop's timezone.
@@ -74,23 +75,7 @@ def candidates(store: Store, now: datetime, states: tuple[str, ...]) -> list:
 
 
 def priority(row) -> int:
-    text = (row["title"] + " " + (row["draft"] or row["summary"])).casefold()
-    signature = event_signature(row["title"], row["summary"])
-    # Event prominence comes before the number of keywords in a long draft.
-    tier = 0
-    if signature:
-        tier = {"announcement": 40, "availability": 35, "update": 25,
-                "fix": 10, "benchmark": 10, "ranking": 10, "pricing": 15}.get(signature[2], 10)
-    elif re.search(r"support|поддержк|open.source|open.weights|developer|разработчик", row["title"], re.I):
-        tier = 25
-    return tier + sum(weight for pattern, weight in (
-        (r"\b(?:llm|model|модел\w*)\b", 5),
-        (r"\b(?:agent\w*|агент\w*)\b", 5),
-        (r"open.source|open.weights|открыт\w*|локальн\w*", 4),
-        (r"research|исследован\w*|paper|benchmark", 3),
-        (r"api|developer|разработчик\w*|инструмент\w*", 3),
-        (r"release|выпуст\w*|обновлен\w*|обновлён\w*", 2),
-    ) if re.search(pattern, text))
+    return editorial_decision(row)['priority']
 
 
 def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[tuple[str, str]]]:
@@ -135,10 +120,10 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
         if canonical_title(fields["what"]) in sent_facts:
             discarded.append((row["url"], "Already published facts; no new development"))
             continue
-        signature = event_signature(row["title"], row["summary"]) or event_signature(fields["headline"], fields["what"])
+        signature = event_key(row) or event_signature(fields["headline"], fields["what"])
         for group in result:
             latest = parse_draft(group[0]["draft"])
-            other_signature = event_signature(group[0]["title"], group[0]["summary"]) or event_signature(latest["headline"], latest["what"])
+            other_signature = event_key(group[0]) or event_signature(latest["headline"], latest["what"])
             # Never collapse different explicit model versions or event types.
             if ((signature is not None and signature == other_signature) or
                 (signature is None and other_signature is None
@@ -149,7 +134,7 @@ def groups(config: dict, store: Store, now: datetime) -> tuple[list[list], list[
                 break
         else:
             result.append([row])
-    result.sort(key=lambda group: priority(group[0]), reverse=True)
+    result.sort(key=lambda group: max(priority(row) for row in group), reverse=True)
     return result, discarded
 
 
@@ -345,7 +330,7 @@ def allocate_cards(cards: list, limit: int) -> list[tuple[str, list]]:
     selected = []
     for fields, group, links in cards:
         full = card({key: public_text(value) for key, value in fields.items()}, detail_first=True)
-        weight = max(1, priority(group[0]))
+        weight = max(1, max(priority(row) for row in group))
         seed_budget = min(limit, max(420 if weight >= 5 else 260, units(full) if units(full) < 260 else 0))
         seed = fitted_card(fields, links, seed_budget)
         if not seed:
@@ -414,6 +399,12 @@ def compose_daily(config: dict, store: Store, now: datetime) -> Edition:
         else:
             checked.append((text, group))
     chosen = checked
+    chosen_urls = {row['url'] for _, group in chosen for row in group}
+    for _, group, _ in cards:
+        for row in group:
+            store.record_editorial(row['url'], 'daily_selection', {
+                'selected': row['url'] in chosen_urls, 'priority': priority(row),
+                'reason': 'Fits verified public edition' if row['url'] in chosen_urls else 'Public length budget or post-shortening gate'})
     telegram = NEWS_SEPARATOR.join(text for text, _ in chosen)
     if telegram:
         assert_public_text(telegram, limit)
@@ -428,8 +419,21 @@ def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
         return ["Daily editor is outside its evening window; no LLM started"]
     if store.digest(window(current)[0]):
         return ["Today's Daily Digest already reserved; no LLM started"]
-    pending = sorted(candidates(store, current, ("pending",)), key=priority, reverse=True)
+    sources = {source['name']: source for source in config['sources']}
+    pending = editorial_queue(candidates(store, current, ("pending",)), sources)
     ready_groups = groups(config, store, current)[0]
+    represented = {key for group in ready_groups for row in group if (key := event_key(row)) is not None}
+    unrepresented = []
+    for index, row in enumerate(pending):
+        store.record_editorial(row['url'], 'editorial_queue', {
+            **editorial_decision(row, sources.get(row['source'])), 'position': index + 1,
+            'as_of': current.isoformat()})
+        if row['article'] and event_key(row) in represented:
+            store.record_editorial(row['url'], 'editorial_deferred_duplicate', {
+                'event_key': event_key(row), 'reason': 'Ready representative; cached identity needs no GPU session'})
+        else:
+            unrepresented.append(row)
+    pending = unrepresented
     final_watch = now is None and current.hour == 20 and current.minute >= 50
     needs_merge = any(len(g) > 1 for g in ready_groups)
     if not pending and not needs_merge and not final_watch:
@@ -454,7 +458,10 @@ def prepare_daily(config: dict, store: Store, root: Path, *, now: datetime | Non
             current = local_now()
             if store.digest(window(current)[0]):
                 break
-            late = sorted(candidates(store, current, ("pending",)), key=priority, reverse=True)
+            late = editorial_queue(candidates(store, current, ("pending",)), sources)
+            represented = {key for group in groups(config, store, current)[0] for row in group
+                           if (key := event_key(row)) is not None}
+            late = [row for row in late if not row['article'] or event_key(row) not in represented]
             if late:
                 with model_session(settings, root):
                     report.extend(prepare(settings, store, limit=len(late), candidate_urls=[r["url"] for r in late]))
