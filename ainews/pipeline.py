@@ -7,16 +7,18 @@ import re
 import time
 import urllib.request
 import urllib.error
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .feeds import Entry, article_details, article_text, download, download_feed, parse_feed
 from .store import Store
 from .security import safe_error
 from .measurements import bindings, numeric_values, numeric_key
+from .editorial import decision as editorial_decision, event_key
 from .quality import (check_semantic_claims, derived_numbers, freshness_hours, repeated_sentences, trim_incomplete_tail,
                       source_window, editorial_context, draft_issues, dated_recap, explicit_event_date, headline_issues)
 
@@ -203,15 +205,16 @@ def original_is_other_moscow_day(value: str, entry_date: str) -> bool:
 
 
 def github_repo_release_date(url: str, post_date: str) -> str:
-    """Date a repo-only TG link by releases that existed when it was posted.
+    """Date a repository/tag link by releases that existed when it was posted.
 
     A release published later cannot retroactively make an earlier repost new.
     README modification or repository push time is not a release date.
     """
     parsed = urlparse(url)
     parts = parsed.path.strip('/').split('/')
-    if parsed.hostname != 'github.com' or len(parts) != 2 or not all(
-            re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts):
+    tagged = len(parts) == 5 and parts[2:4] == ['releases', 'tag']
+    if parsed.hostname != 'github.com' or (len(parts) != 2 and not tagged) or not all(
+            re.fullmatch(r'[A-Za-z0-9_.-]+', part) for part in parts[:2]):
         raise ValueError('Not a GitHub repository URL')
     try:
         cutoff = parsedate_to_datetime(post_date)
@@ -219,9 +222,13 @@ def github_repo_release_date(url: str, post_date: str) -> str:
         cutoff = datetime.fromisoformat(post_date.replace('Z', '+00:00'))
     if cutoff.tzinfo is None:
         cutoff = cutoff.replace(tzinfo=timezone.utc)
-    raw, _ = download(f'https://api.github.com/repos/{parts[0]}/{parts[1]}/releases?per_page=5',
+    endpoint = ('/releases/tags/' + quote(unquote(parts[4]), safe='') if tagged else '/releases?per_page=5')
+    raw, _ = download(f'https://api.github.com/repos/{parts[0]}/{parts[1]}' + endpoint,
                       allowed_hosts=['api.github.com'], max_bytes=500_000)
-    releases = json.loads(raw)
+    payload = json.loads(raw)
+    if tagged and (not isinstance(payload, dict) or payload.get('tag_name') != unquote(parts[4])):
+        raise ValueError('GitHub release tag does not match the requested version')
+    releases = [payload] if tagged else payload
     if not isinstance(releases, list):
         raise ValueError('Invalid GitHub release metadata')
     dated = []
@@ -477,7 +484,7 @@ def revise_draft(
 
 
 def align_evidence(draft: dict[str, Any], source_text: str) -> dict[str, Any]:
-    """Restore source typography only when the evidence is otherwise identical."""
+    """Restore an exact source slice from typography, sentence or bullet matches."""
     evidence = " ".join(str(draft.get("evidence", "")).split())
     source = " ".join(source_text.split())
     if evidence in source or not evidence:
@@ -502,7 +509,20 @@ def align_evidence(draft: dict[str, Any], source_text: str) -> dict[str, Any]:
         # Small models sometimes splice two true source sentences into one
         # evidence field. Keep a single exact sentence rather than inventing a
         # citation or weakening the exact-excerpt gate.
-        for sentence in sorted(re.split(r"(?<=[.!?])\s+", evidence), key=len, reverse=True):
+        # Feed extraction can flatten a bulleted list into one line. Treat
+        # standalone pictographic bullets like sentence boundaries; currency,
+        # mathematical signs and symbols inside words/units are not separators.
+        # This only locates an exact source slice. Every draft claim still goes
+        # through the same semantic verifier against the complete source.
+        bullet_parts = []
+        start = 0
+        for index, character in enumerate(evidence):
+            if index and evidence[index - 1].isspace() and unicodedata.category(character) == 'So':
+                bullet_parts.append(evidence[start:index].strip())
+                start = index
+        bullet_parts.append(evidence[start:].strip())
+        pieces = [piece for part in bullet_parts for piece in re.split(r"(?<=[.!?])\s+", part)]
+        for sentence in sorted(pieces, key=len, reverse=True):
             if not 25 <= len(sentence) <= 500:
                 continue
             at = source.translate(punctuation).find(sentence.translate(punctuation))
@@ -998,6 +1018,31 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
         if source is None:
             store.set_state(url, "needs_review", error="Source is no longer configured")
             continue
+        if config.get('publication_mode') == 'daily':
+            decision = editorial_decision(row, source)
+            store.record_editorial(url, 'editorial_eligibility', decision)
+            if decision['eligibility'] == 'needs_event_evidence':
+                store.set_state(url, 'needs_review', error='Recap needs evidence of a distinct current event')
+                report.append(f'REVIEW recap: {title}')
+                continue
+            # A quote-only repost cannot turn a retained old announcement into
+            # a new launch. Commentary with its own event is left to the editor.
+            summary = row['summary']
+            marker = '[Начало цитируемого поста]'
+            if marker in summary:
+                prefix = summary.split(marker, 1)[0]
+                comment = re.sub(r'^Комментарий аккаунта[^:]*:', '', prefix).strip()
+                ids = re.findall(r'/status/(\d+)', summary.split(marker, 1)[1])
+                if not comment and ids:
+                    original = store.db.execute('SELECT published FROM items WHERE url LIKE ? AND url != ? LIMIT 1',
+                                                ('%/status/' + ids[0], url)).fetchone()
+                    if original and not recent_enough(original['published'], minutes=1440):
+                        store.record_editorial(url, 'editorial_eligibility', {
+                            'eligibility': 'old_quote', 'original_published': original['published'],
+                            'reason': 'Quote-only repost of retained old source; outer timestamp is not an event date'})
+                        store.set_state(url, 'skipped', error='Quote-only repost of an old original announcement')
+                        report.append(f'SKIP old quote: {title}')
+                        continue
         if prerelease_url(url):
             store.set_state(url, "skipped", error="Pre-release version")
             report.append(f"SKIP pre-release: {title}")
@@ -1076,8 +1121,18 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                                       event_date=verified_release_date or explicit_event_date(
                                           row['summary'] if source.get('type') == 'x' and source.get('primary_account') else article))
             release_date = explicit_event_date(article) if '/releases/tag/' in url else None
-            if release_date and config.get('publication_mode') == 'daily' and original_is_other_moscow_day(release_date, row['published']):
-                store.set_state(url, 'skipped', article=article, error='Explicit release date predates the digest day')
+            if '/releases/tag/' in url and not release_date and not original_date:
+                dates = store.db.execute('SELECT * FROM source_dates WHERE url=?', (url,)).fetchone()
+                if dates and dates['date_kind'] == 'updated':
+                    release_date = github_repo_release_date(url, row['published'])
+                    store.record_source_dates(url, event_date=release_date)
+                    store.record_editorial(url, 'source_date_verification', {
+                        'kind': 'exact_github_tag', 'released_at': release_date,
+                        'as_of_source_post': row['published']})
+            if release_date and config.get('publication_mode') == 'daily' and (
+                    original_article_is_old(release_date, minutes=freshness_minutes)
+                    or original_is_other_moscow_day(release_date, row['published'])):
+                store.set_state(url, 'skipped', article=article, error='Verified release date outside daily freshness window')
                 report.append(f'SKIP old release: {title}')
                 continue
             if config.get("publication_mode") == "daily" and dated_recap(row["summary"]):
@@ -1101,6 +1156,21 @@ def prepare(config: dict[str, Any], store: Store, *, limit: int = 3,
                         {'url': document['url'], 'published': document.get('published'), 'role': 'linked_background',
                          'text': source_window(document['text'], 4500)}]
             if config.get("publication_mode") == "daily":
+                # Reuse the publisher's eligibility/quality checks. A stale,
+                # disabled or malformed Ready row must not starve a valid
+                # alternative merely because it has the same product name.
+                from .daily import groups
+                ready = [r for group in groups(config, store, datetime.now(timezone.utc))[0] for r in group]
+                identity = event_key({**dict(row), 'article': article})
+                represented = next((r for r in ready if identity is not None and event_key(r) == identity), None)
+                if represented is not None:
+                    store.record_editorial(url, 'editorial_deferred_duplicate', {
+                        'representative': represented['url'], 'event_key': identity,
+                        'reason': 'Verified event already ready; alternative source retained for audit'})
+                    store.set_state(url, 'pending', article=article, error='Event already has a ready representative')
+                    prepared -= 1
+                    report.append(f'DEFER represented event: {title}')
+                    continue
                 cached = store.db.execute(
                     "SELECT title,draft FROM items WHERE state='ready' AND article=? AND draft IS NOT NULL",
                     (article,),
